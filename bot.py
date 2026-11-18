@@ -219,7 +219,11 @@ async def publish_score(user, result_text):
 # ---------------- Mini App API: серверный кошелёк ----------------
 
 def validate_init_data(init_data: str):
-    """Проверяет подпись Telegram.WebApp.initData. Возвращает dict или None."""
+    """Проверяет подпись Telegram.WebApp.initData. Возвращает dict или None.
+
+    Telegram подписывает initData ключом HMAC-SHA256("WebAppData", bot_token).
+    Для совместимости перебираем несколько вариантов ключа.
+    """
     try:
         parts = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
     except Exception:
@@ -227,24 +231,28 @@ def validate_init_data(init_data: str):
     received = parts.pop("hash", None)
     if not received:
         return None
-    # Telegram также присылает Ed25519-поле signature — его не включаем в data_check_string.
+    # Поле signature (Ed25519) в проверочную строку не входит.
     parts.pop("signature", None)
     data_check = "\n".join(f"{k}={v}" for k, v in sorted(parts.items()))
-    # Ключ подписи Mini App: HMAC-SHA256 с ключом "WebAppData" (не sha256(токен)!)
-    secret = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
-    calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(calc, received):
-        # Диагностика: пишем, что именно пришло (маскируем хеш)
-        try:
-            import logging as _lg
-            _lg.warning("INITDATA_MISMATCH keys=%s dc_len=%d dc_head=%r received_head=%r calc=%s alt_sha=%s raw=%r",
-                        sorted(parts.keys()), len(data_check), data_check[:120],
-                        received[:16], calc[:16],
-                        hmac.new(hashlib.sha256(BOT_TOKEN.encode()).digest(),
-                                 data_check.encode("utf-8"), hashlib.sha256).hexdigest()[:16],
-                        init_data[:400])
-        except Exception:
-            pass
+    token = (BOT_TOKEN or "").strip()
+    candidates = [
+        hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest(),
+        hashlib.sha256(token.encode("utf-8")).digest(),
+        token.encode("utf-8"),
+    ]
+    ok = False
+    for secret in candidates:
+        calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(calc, received):
+            ok = True
+            break
+    try:
+        import logging as _lg
+        _lg.warning("INITDATA keys=%s dc=%r received=%s ok=%s tok_tail=%r",
+                    sorted(parts.keys()), data_check[:200], received[:16], ok, token[-6:])
+    except Exception:
+        pass
+    if not ok:
         return None
     try:
         auth_date = int(parts.get("auth_date", "0"))
