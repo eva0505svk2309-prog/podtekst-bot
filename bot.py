@@ -9,11 +9,14 @@ from aiogram.client.default import DefaultBotProperties
 
 BOT_TOKEN  = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://podtekst-mz6thc2z.agent.mira.tg").rstrip("/")
+
 # Принудительное обновление Mini App: меняем версию при каждом деплое,
 # иначе Telegram WebView отдаёт закэшированную старую страницу.
-BUILD = os.environ.get("BUILD_ID", "3")
-if "?v=" not in WEBAPP_URL:
+BUILD = os.environ.get("BUILD_ID", "4")
+if "?" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}?v={BUILD}"
+elif "v=" not in WEBAPP_URL:
+    WEBAPP_URL = f"{WEBAPP_URL}&v={BUILD}"
 CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
 CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "-1004469511755")
 
