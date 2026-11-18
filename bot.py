@@ -227,6 +227,8 @@ def validate_init_data(init_data: str):
     received = parts.pop("hash", None)
     if not received:
         return None
+    # Telegram также присылает Ed25519-поле signature — его не включаем в data_check_string.
+    parts.pop("signature", None)
     data_check = "\n".join(f"{k}={v}" for k, v in sorted(parts.items()))
     secret = hashlib.sha256(BOT_TOKEN.encode()).digest()
     calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
