@@ -69,6 +69,7 @@ a{color:#c4b5fd}
  <div class="row">
   <button id="qBuy">🪙 Купить монеты</button>
   <button id="qRef">👥 Пригласить</button>
+  <button id="qDaily">🎁 Бонус дня</button>
  </div>
 </section>
 
@@ -211,6 +212,12 @@ $("qNext").onclick=()=>loadQuestion("random");
 $("qSkip").onclick=()=>{if(!answered)pick(-1,null)};
 $("qBuy").onclick=()=>{tg.sendData("buy")};
 $("qRef").onclick=()=>{tg.sendData("ref")};
+$("qDaily").onclick=async()=>{
+  const j=await api("daily",{});
+  if(!j){toast("Нет связи с сервером");return;}
+  if(j.ok){toast("🎁 Бонус дня получен: +20 🪙 и +1 💗");}
+  else toast("Бонус дня уже получен сегодня");
+};
 
 
 /* ---------- MATCH3 ---------- */
