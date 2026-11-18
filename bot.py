@@ -221,9 +221,13 @@ async def publish_score(user, result_text):
 def validate_init_data(init_data: str):
     """Проверяет подпись Telegram.WebApp.initData. Возвращает dict или None.
 
-    Telegram подписывает initData ключом HMAC-SHA256("WebAppData", bot_token).
-    Для совместимости перебираем несколько вариантов ключа.
+    Формула (проверена на реальных данных Telegram):
+      secret_key = HMAC-SHA256(b"WebAppData", bot_token)
+      data_check_string = "\n".join(f"{k}={v}" for k,v in sorted(params))
+      где params — URL-декодированные значения, И "signature" ВХОДИТ в строку.
     """
+    if not init_data:
+        return None
     try:
         parts = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
     except Exception:
@@ -231,28 +235,12 @@ def validate_init_data(init_data: str):
     received = parts.pop("hash", None)
     if not received:
         return None
-    # Поле signature (Ed25519) в проверочную строку не входит.
-    parts.pop("signature", None)
-    data_check = "\n".join(f"{k}={v}" for k, v in sorted(parts.items()))
+    # ВАЖНО: поле "signature" (Ed25519) ОСТАЁТСЯ в data_check_string.
+    data_check = "\n".join(f"{k}={parts[k]}" for k in sorted(parts))
     token = (BOT_TOKEN or "").strip()
-    candidates = [
-        hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest(),
-        hashlib.sha256(token.encode("utf-8")).digest(),
-        token.encode("utf-8"),
-    ]
-    ok = False
-    for secret in candidates:
-        calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
-        if hmac.compare_digest(calc, received):
-            ok = True
-            break
-    try:
-        import logging as _lg, base64 as _b64
-        _lg.warning("INITDATA_RAW_B64=%s ok=%s",
-                    _b64.b64encode(init_data.encode("utf-8")).decode("ascii"), ok)
-    except Exception:
-        pass
-    if not ok:
+    secret = hmac.new(b"WebAppData", token.encode("utf-8"), hashlib.sha256).digest()
+    calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calc, received):
         return None
     try:
         auth_date = int(parts.get("auth_date", "0"))
