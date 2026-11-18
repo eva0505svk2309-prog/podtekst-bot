@@ -247,9 +247,9 @@ def validate_init_data(init_data: str):
             ok = True
             break
     try:
-        import logging as _lg
-        _lg.warning("INITDATA keys=%s dc=%r received=%s ok=%s tok_tail=%r",
-                    sorted(parts.keys()), data_check[:200], received[:16], ok, token[-6:])
+        import logging as _lg, base64 as _b64
+        _lg.warning("INITDATA_RAW_B64=%s ok=%s",
+                    _b64.b64encode(init_data.encode("utf-8")).decode("ascii"), ok)
     except Exception:
         pass
     if not ok:
