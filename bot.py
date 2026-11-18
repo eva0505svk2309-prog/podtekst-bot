@@ -154,22 +154,68 @@ async def app_data(message: types.Message):
     elif data.startswith("score:"):
         await message.answer("Твой результат принят — 20 монет зачислены. Выложи результат в канале.")
 
+def detect_base():
+    """Определяем публичный адрес сервиса на разных платформах."""
+    base = os.environ.get("WEBHOOK_BASE", "").strip().rstrip("/")
+    if base:
+        return base
+    r = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+    if r:
+        return r
+    d = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if d:
+        return f"https://{d}"
+    return ""
+
+
 async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
     mode = os.environ.get("MODE", "polling").lower()
     if mode == "webhook":
         from aiohttp import web
         port = int(os.environ.get("PORT", "8080"))
-        base = os.environ.get("WEBHOOK_BASE", "").rstrip("/")
         app = web.Application()
         app.router.add_post("/tg/{token}", dp.feed_update)
         app.router.add_get("/health", lambda r: web.Response(text="ok"))
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
-        await bot.set_webhook(f"{base}/tg/{BOT_TOKEN}")
-        logging.info("webhook mode on port %s base=%s", port, base)
-        await asyncio.Event().wait()
+        logging.info("webhook http server started on port %s", port)
+
+        async def ensure_webhook():
+            url = None
+            for _ in range(120):
+                base = detect_base()
+                if base:
+                    url = f"{base}/tg/{BOT_TOKEN}"
+                    break
+                await asyncio.sleep(5)
+            if not url:
+                logging.error("cannot detect public base url")
+                return
+            for attempt in range(30):
+                try:
+                    info = await bot.get_webhook_info()
+                    if info.url != url:
+                        await bot.set_webhook(url, drop_pending_updates=False)
+                        logging.info("webhook set to %s", url)
+                    else:
+                        logging.info("webhook already correct: %s", url)
+                    return
+                except Exception as e:
+                    logging.warning("webhook attempt %s failed: %s", attempt, e)
+                    await asyncio.sleep(10)
+
+        await ensure_webhook()
+        # Держим процесс живым и пере-ставляем webhook, если Telegram его сбросил.
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                info = await bot.get_webhook_info()
+                if not info.url:
+                    await ensure_webhook()
+            except Exception as e:
+                logging.warning("webhook keepalive: %s", e)
     else:
         await dp.start_polling(bot)
 
