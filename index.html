@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>ПОДТЕКСТ</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -24,10 +27,60 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
 .row>*{flex:1}
 .view{display:none}
 .view.on{display:block}
-#board{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;background:#0e0819;padding:6px;border-radius:14px}
-.cell{aspect-ratio:1;border-radius:10px;background:#241546;display:flex;align-items:center;justify-content:center;font-size:clamp(19px,6.6vw,32px)}
-.cell.sel{background:#3b2170;transform:scale(1.08)}
-.cell.pop{background:#7c3aed}
+/* ---------- MATCH3 REDESIGN v2 ---------- */
+#m3wrap{position:relative}
+#board{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;background:
+  radial-gradient(120% 120% at 50% 0%,#241546 0%,#0d0718 100%);
+  padding:8px;border-radius:18px;box-shadow:inset 0 2px 18px rgba(0,0,0,.6),0 8px 26px rgba(0,0,0,.45);touch-action:none;overflow:hidden}
+.cell{aspect-ratio:1;border-radius:12px;position:relative;display:flex;align-items:center;justify-content:center;
+  font-size:clamp(20px,6.8vw,34px);cursor:grab;user-select:none;-webkit-user-select:none;
+  background:linear-gradient(160deg,#2c1a54,#1c1033);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 2px 6px rgba(0,0,0,.4);
+  transition:transform .16s cubic-bezier(.34,1.56,.64,1),background .2s}
+.cell:active{cursor:grabbing}
+.cell.sel{background:linear-gradient(160deg,#5b2f9e,#33205c);box-shadow:0 0 0 2px #ff4d8d,0 0 18px rgba(255,77,141,.55);transform:scale(1.09)}
+.cell.pop{animation:cellpop .3s ease-out}
+.cell.bomb{background:linear-gradient(160deg,#7f1d3a,#3a0d1c);box-shadow:0 0 14px rgba(255,60,90,.6),inset 0 1px 0 rgba(255,255,255,.12);animation:bombpulse 1.6s ease-in-out infinite}
+.cell.rainbow{background:linear-gradient(135deg,#ff4d8d,#ffb84d,#4ade80,#38bdf8,#a86bff);
+  box-shadow:0 0 18px rgba(255,184,77,.65);animation:rainbowspin 2.4s linear infinite;font-size:clamp(18px,5.6vw,28px)}
+@keyframes cellpop{0%{transform:scale(1)}45%{transform:scale(1.28);filter:brightness(1.8)}100%{transform:scale(1);filter:brightness(1)}}
+@keyframes bombpulse{0%,100%{box-shadow:0 0 10px rgba(255,60,90,.45)}50%{box-shadow:0 0 22px rgba(255,60,90,.9)}}
+@keyframes rainbowspin{0%{filter:hue-rotate(0deg)}100%{filter:hue-rotate(360deg)}}
+.m3hud{display:flex;gap:6px;align-items:center;justify-content:space-between;margin-bottom:8px}
+.m3stat{background:#1a1030;border:1px solid #432c74;border-radius:12px;padding:5px 9px;text-align:center;min-width:64px}
+.m3stat b{display:block;font-size:16px;line-height:1.1}
+.m3stat span{font-size:10px;color:#a894d4;text-transform:uppercase;letter-spacing:.6px}
+.m3stat.big{min-width:96px;background:linear-gradient(135deg,rgba(255,77,141,.22),rgba(168,107,255,.22))}
+.m3stat.big b{font-size:22px;color:#ffb84d}
+#comboBox{font-weight:900;font-size:14px;color:#ffb84d;text-shadow:0 0 12px rgba(255,184,77,.8);opacity:0;transition:opacity .2s}
+#comboBox.on{opacity:1;animation:combopop .45s ease-out}
+@keyframes combopop{0%{transform:scale(.4)}60%{transform:scale(1.25)}100%{transform:scale(1)}}
+#fx{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:20}
+.fxp{position:absolute;width:9px;height:9px;border-radius:50%;pointer-events:none;animation:particle .62s ease-out forwards}
+@keyframes particle{0%{transform:translate(0,0) scale(1);opacity:1}100%{transform:translate(var(--dx),var(--dy)) scale(0);opacity:0}}
+.floatscore{position:absolute;font-weight:900;font-size:19px;color:#fff;text-shadow:0 2px 8px rgba(0,0,0,.7),0 0 14px #ff4d8d;
+  animation:floatup .85s ease-out forwards;pointer-events:none;white-space:nowrap}
+@keyframes floatup{0%{transform:translate(-50%,0) scale(.6);opacity:0}25%{transform:translate(-50%,-14px) scale(1.15);opacity:1}100%{transform:translate(-50%,-58px) scale(1);opacity:0}}
+#flash{position:absolute;inset:0;background:radial-gradient(circle at 50% 50%,rgba(255,255,255,.85),rgba(255,77,141,.1) 60%,transparent 75%);
+  opacity:0;pointer-events:none;z-index:22}
+#flash.go{animation:flashfx .42s ease-out}
+@keyframes flashfx{0%{opacity:.9}100%{opacity:0}}
+.shake{animation:shakefx .38s cubic-bezier(.36,.07,.19,.97)}
+@keyframes shakefx{10%,90%{transform:translate(-2px,1px)}20%,80%{transform:translate(4px,-2px)}30%,50%,70%{transform:translate(-7px,2px)}40%,60%{transform:translate(7px,-1px)}}
+#banner{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%) scale(.5);opacity:0;
+  font-weight:900;font-size:26px;letter-spacing:1px;text-align:center;z-index:24;pointer-events:none;
+  background:linear-gradient(90deg,#ff4d8d,#ffb84d,#4ade80);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 4px 14px rgba(0,0,0,.7))}
+#banner.go{animation:bannerfx 1.15s cubic-bezier(.2,.9,.3,1)}
+@keyframes bannerfx{0%{opacity:0;transform:translate(-50%,-50%) scale(.4) rotate(-8deg)}
+ 22%{opacity:1;transform:translate(-50%,-50%) scale(1.18) rotate(3deg)}
+ 70%{opacity:1;transform:translate(-50%,-50%) scale(1)}
+ 100%{opacity:0;transform:translate(-50%,-90%) scale(.9)}}
+#ghost{position:fixed;z-index:999;pointer-events:none;font-size:clamp(20px,6.8vw,34px);
+  width:40px;height:40px;display:flex;align-items:center;justify-content:center;
+  transform:translate(-50%,-50%) scale(1.22);filter:drop-shadow(0 6px 12px rgba(0,0,0,.6))}
+#ghost.hidden{display:none}
+
 #q{font-size:18px;font-weight:800;line-height:1.3;margin-bottom:10px}
 .opt{width:100%;text-align:left;margin-bottom:8px;font-weight:600}
 .opt.ok{background:#14532d;border-color:#22c55e;color:#dcfce7}
@@ -76,12 +129,23 @@ a{color:#c4b5fd}
 <!-- MATCH3 -->
 <section class="view" id="v-m3">
  <div class="card">
-  <div style="display:flex;justify-content:space-between;font-size:13px;color:#a894d4">
-   <span>Ур. <b id="lvl">1</b></span><span id="goalTxt">цель: 0</span><span>ходов: <b id="moves">20</b></span>
+  <div class="m3hud">
+   <div class="m3stat"><b id="lvl">1</b><span>уровень</span></div>
+   <div class="m3stat big"><b id="score">0</b><span>очки</span></div>
+   <div class="m3stat"><b id="moves">20</b><span>ходы</span></div>
   </div>
   <div id="bar"><i></i></div>
-  <div id="board"></div>
-  <div class="hint" id="m3hint">Выбери тайл и соседний</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#a894d4;margin-bottom:6px">
+   <span id="goalTxt">цель: 0</span>
+   <span id="comboBox">КОМБО x2</span>
+  </div>
+  <div id="m3wrap">
+   <div id="board"></div>
+   <div id="fx"></div>
+   <div id="flash"></div>
+   <div id="banner"></div>
+  </div>
+  <div class="hint" id="m3hint">Перетащи фигуру на соседнюю</div>
  </div>
  <div class="row">
   <button id="mMove">+5 ходов · 50 🪙</button>
@@ -108,6 +172,7 @@ a{color:#c4b5fd}
  <div class="hint" id="dhint">У всех одинаковые задания. Топ-10% получает бонус.</div>
 </section>
 
+<div id="ghost" class="hidden"></div>
 <div class="small">18+ · <a href="https://t.me/podtekst_game_bot">канал</a> ·
  <span id="ts"></span></div>
 
@@ -117,9 +182,16 @@ tg.setHeaderColor('#120a1e');tg.setBackgroundColor('#120a1e');
 const $=id=>document.getElementById(id);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const toast=m=>{try{tg.showAlert(m)}catch(e){alert(m)}};
+/* Открываем бота: сначала пробуем sendData, если не сработало — deep-link.
+   tg.sendData работает только когда Mini App открыт из кнопки бота. */
+function botCmd(cmd){
+  try{ location.href="https://t.me/"+BOT+"?start="+encodeURIComponent(cmd); }
+  catch(e){ toast("Не удалось открыть бота"); }
+}
 
 /* ---------- wallet (server-authoritative) ---------- */
 const API="https://podtekst-bot-production.up.railway.app";
+const BOT="podtekst_game_bot";
 const INIT=(window.Telegram&&Telegram.WebApp&&Telegram.WebApp.initData)||"";
 const S={coins:0,streak:0,lives:5,lvl:1,best:0,noads:false};
 let pending=null;
@@ -158,6 +230,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  b.classList.add('on');
  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
  $('v-'+b.dataset.v).classList.add('on');
+ if(b.dataset.v==='m3' && (!grid || !grid.length)){ try{ startLevel(); }catch(e){} }
 });
 
 /* ---------- QUIZ (server-authoritative) ---------- */
@@ -210,8 +283,8 @@ async function pick(k,btn){
 }
 $("qNext").onclick=()=>loadQuestion("random");
 $("qSkip").onclick=()=>{if(!answered)pick(-1,null)};
-$("qBuy").onclick=()=>{tg.sendData("buy")};
-$("qRef").onclick=()=>{tg.sendData("ref")};
+$("qBuy").onclick=()=>{botCmd("buy")};
+$("qRef").onclick=()=>{botCmd("ref")};
 $("qDaily").onclick=async()=>{
   const j=await api("daily",{});
   if(!j){toast("Нет связи с сервером");return;}
@@ -220,63 +293,149 @@ $("qDaily").onclick=async()=>{
 };
 
 
-/* ---------- MATCH3 ---------- */
-const N=8,TYPES=['🍷','🍸','🌶️','💋','🍑','🧿'];
+/* ---------- MATCH3 v2 (drag + specials + fx) ---------- */
+const N=8;
+const TYPES=['🍷','🍸','🌶️','💋','🍑','🧿'];
+const SPECIAL={BOMB:6,RAINBOW:7};
 let grid=[],sel=null,score=0,goal=0,moves=0,combo=0,busy=false,rng=Math.random;
+let dragFrom=null,dragMoved=false;
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
 function seeded(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();return mulberry(k)}
 function rnd(n){return Math.floor(rng()*n)}
 function filled(){const g=[];for(let r=0;r<N;r++){g.push([]);for(let c=0;c<N;c++)g[r].push(-1)}return g}
+function isSpecial(v){return v===SPECIAL.BOMB||v===SPECIAL.RAINBOW}
 function findMatches(g){const s=new Set();
- for(let r=0;r<N;r++){let run=1;for(let c=1;c<=N;c++){const same=c<N&&g[r][c]===g[r][c-1]&&g[r][c]!==-1;
+ for(let r=0;r<N;r++){let run=1;for(let c=1;c<=N;c++){const same=c<N&&g[r][c]===g[r][c-1]&&g[r][c]!==-1&&!isSpecial(g[r][c]);
   if(same)run++;else{if(run>=3)for(let x=c-run;x<c;x++)s.add(r+','+x);run=1}}}
- for(let c=0;c<N;c++){let run=1;for(let r=1;r<=N;r++){const same=r<N&&g[r][c]===g[r-1][c]&&g[r][c]!==-1;
+ for(let c=0;c<N;c++){let run=1;for(let r=1;r<=N;r++){const same=r<N&&g[r][c]===g[r-1][c]&&g[r][c]!==-1&&!isSpecial(g[r][c]);
   if(same)run++;else{if(run>=3)for(let x=r-run;x<r;x++)s.add(x+','+c);run=1}}}
  return s}
 function hasMove(g){for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){
   const r2=r+dr,c2=c+dc;if(r2>=N||c2>=N)continue;const a=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=a;
   const ok=findMatches(g).size>0;const b=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=b;if(ok)return true}return false}
+function fxLayer(){return document.getElementById("fx")}
+function cellRect(r,c){const b=document.getElementById("board");const el=b.children[r*N+c];if(!el)return null;
+ const br=b.getBoundingClientRect(),er=el.getBoundingClientRect();
+ return {x:er.left-br.left+er.width/2,y:er.top-br.top+er.height/2,w:er.width,h:er.height}}
+function burst(r,c,color,n){const L=fxLayer();if(!L)return;const p=cellRect(r,c);if(!p)return;
+ for(let i=0;i<(n||12);i++){const d=document.createElement("div");d.className="fxp";
+  d.style.left=p.x+"px";d.style.top=p.y+"px";d.style.background=color||"#ff4d8d";
+  const ang=Math.random()*Math.PI*2,dist=26+Math.random()*46;
+  d.style.setProperty("--dx",Math.cos(ang)*dist+"px");d.style.setProperty("--dy",Math.sin(ang)*dist+"px");
+  d.style.width=(5+Math.random()*6)+"px";d.style.height=d.style.width;L.appendChild(d);
+  setTimeout(()=>d.remove(),700)}}
+function floatScore(r,c,txt,color){const L=fxLayer();if(!L)return;const p=cellRect(r,c);if(!p)return;
+ const d=document.createElement("div");d.className="floatscore";d.textContent=txt;
+ d.style.left=p.x+"px";d.style.top=p.y+"px";if(color)d.style.color=color;L.appendChild(d);
+ setTimeout(()=>d.remove(),900)}
+function shake(){const w=document.getElementById("m3wrap");if(!w)return;w.classList.remove("shake");void w.offsetWidth;w.classList.add("shake");
+ setTimeout(()=>w.classList.remove("shake"),420)}
+function flash(){const f=document.getElementById("flash");if(!f)return;f.classList.remove("go");void f.offsetWidth;f.classList.add("go")}
+function banner(txt){const b=document.getElementById("banner");if(!b)return;b.textContent=txt;b.classList.remove("go");void b.offsetWidth;b.classList.add("go")}
+function comboUI(n){const c=document.getElementById("comboBox");if(!c)return;if(n>1){c.textContent="КОМБО ×"+n;c.classList.add("on")}else c.classList.remove("on")}
 function makeBoard(){let g=filled();for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);
- for(let i=0;i<50;i++){const m=findMatches(g);if(!m.size)break;m.forEach(k=>g[k.r][k.c]=rnd(TYPES.length))}
- let guard=0;while(!hasMove(g)&&guard++<30){g=filled();for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);
-  for(let i=0;i<50;i++){const m=findMatches(g);if(!m.size)break;m.forEach(k=>g[k.r][k.c]=rnd(TYPES.length))}}
+ const fix=()=>{for(let i=0;i<60;i++){const m=findMatches(g);if(!m.size)break;
+  m.forEach(k=>{const p=k.split(",");g[+p[0]][+p[1]]=rnd(TYPES.length)})}};
+ fix();let guard=0;while(!hasMove(g)&&guard++<40){g=filled();
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);fix()}
  return g}
-function render(pop){const bd=$("board");bd.innerHTML="";
+function tileEmoji(v){if(v===SPECIAL.BOMB)return "💣";if(v===SPECIAL.RAINBOW)return "🌈";
+ return v>=0&&v<TYPES.length?TYPES[v]:""}
+function render(pop){const bd=document.getElementById("board");if(!bd)return;bd.innerHTML="";
  for(let r=0;r<N;r++)for(let c=0;c<N;c++){const d=document.createElement("div");
-  d.className="cell"+(pop&&pop.has(r+','+c)?" pop":"")+(sel&&sel.r===r&&sel.c===c?" sel":"");
-  d.textContent=grid[r][c]===-1?"":TYPES[grid[r][c]];d.onclick=()=>tap(r,c);bd.appendChild(d)}}
-function gravity(){for(let c=0;c<N;c++){let w=N-1;for(let r=N-1;r>=0;r--)if(grid[r][c]!==-1){grid[w][c]=grid[r][c];if(w!==r)grid[r][c]=-1;w--}
- for(let r=w;r>=0;r--)grid[r][c]=rnd(TYPES.length)}}
-async function resolve(){while(true){const m=findMatches(grid);if(!m.size)break;combo++;
- const gain=m.size*10*combo;score+=gain;m.forEach(k=>grid[k.r][k.c]=-1);render(m);await sleep(220);
- gravity();render();await sleep(150)}combo=0;if(!hasMove(grid))grid=makeBoard();upd()}
-function upd(){$("moves").textContent=moves;$("goalTxt").textContent="цель: "+goal;
- $("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
+  const v=grid[r][c];d.className="cell";
+  if(pop&&pop.has(r+','+c))d.classList.add("pop");
+  if(sel&&sel.r===r&&sel.c===c)d.classList.add("sel");
+  if(v===SPECIAL.BOMB)d.classList.add("bomb");
+  if(v===SPECIAL.RAINBOW)d.classList.add("rainbow");
+  d.textContent=v===-1?"":tileEmoji(v);
+  d.dataset.r=r;d.dataset.c=c;
+  d.addEventListener("pointerdown",onDown);d.addEventListener("pointermove",onMove);
+  d.addEventListener("pointerup",onUp);d.addEventListener("pointercancel",onUp);
+  bd.appendChild(d)}
+ upd()}
+function showGhost(el,v){const g=document.getElementById("ghost");if(!g)return;g.classList.remove("hidden");
+ g.textContent=tileEmoji(v);const er=el.getBoundingClientRect();
+ g.style.left=(er.left+er.width/2)+"px";g.style.top=(er.top+er.height/2)+"px"}
+function hideGhost(){const g=document.getElementById("ghost");if(g)g.classList.add("hidden")}
+function onDown(e){if(busy)return;const el=e.currentTarget;const r=+el.dataset.r,c=+el.dataset.c;
+ if(grid[r][c]===-1)return;
+ dragFrom={r,c};dragMoved=false;
+ try{el.setPointerCapture(e.pointerId)}catch(_){}
+ showGhost(el,grid[r][c])}
+function onMove(e){if(!dragFrom||busy)return;const el=e.currentTarget;const r=+el.dataset.r,c=+el.dataset.c;
+ if(r===dragFrom.r&&c===dragFrom.c)return;
+ dragMoved=true;
+ const g=document.getElementById("ghost");if(g){const b=document.getElementById("board").getBoundingClientRect();
+  g.style.left=(e.clientX-b.left)+"px";g.style.top=(e.clientY-b.top)+"px"}
+ if(Math.abs(r-dragFrom.r)+Math.abs(c-dragFrom.c)!==1)return;
+ const from=dragFrom;dragFrom=null;hideGhost();
+ doSwap(from.r,from.c,r,c)}
+function onUp(e){if(dragFrom&&!dragMoved){const r=dragFrom.r,c=dragFrom.c;dragFrom=null;hideGhost();tap(r,c)}
+ else{dragFrom=null;hideGhost()}}
 async function tap(r,c){if(busy)return;if(!sel){sel={r,c};render();return}
  if(sel.r===r&&sel.c===c){sel=null;render();return}
  const dr=Math.abs(sel.r-r),dc=Math.abs(sel.c-c);
  if(dr+dc!==1){sel={r,c};render();return}
- busy=true;const a=sel;sel=null;[grid[a.r][a.c],grid[r][c]]=[grid[r][c],grid[a.r][a.c]];
- if(!findMatches(grid).size){[grid[a.r][a.c],grid[r][c]]=[grid[r][c],grid[a.r][a.c]];
-  $("m3hint").textContent="Так не выйдет 🙃";busy=false;render();return}
+ const from=sel;sel=null;await doSwap(from.r,from.c,r,c)}
+async function doSwap(r1,c1,r2,c2){if(busy)return;busy=true;
+ const a=grid[r1][c1],b=grid[r2][c2];
+ if(a===-1||b===-1){busy=false;return}
+ const specialSwap=isSpecial(a)||isSpecial(b);
+ [grid[r1][c1],grid[r2][c2]]=[grid[r2][c2],grid[r1][c1]];
+ render();
+ if(!specialSwap&&!findMatches(grid).size){
+  [grid[r1][c1],grid[r2][c2]]=[grid[r2][c2],grid[r1][c1]];
+  document.getElementById("m3hint").textContent="Так не выйдет 🙃";render();busy=false;return}
  moves--;upd();await resolve();busy=false;
  if(score>=goal){const left=moves,stars=left>=10?3:left>=5?2:1;S.coins+=30+stars*20;S.lvl++;save();
-  $("m3hint").textContent="Уровень пройден! ⭐".repeat(stars)+" +"+(30+stars*20)+" 🪙";upd();return}
- if(moves<=0){$("m3hint").textContent="Ходы кончились. +5 ходов за рекламу или за 50 🪙";}}
-function startLevel(){if(S.lives<=0){$("m3hint").textContent="Жизни кончились — посмотри рекламу в боте";return}
- S.lives--;save();score=0;goal=Math.round(400*Math.pow(1.32,S.lvl-1));moves=20;combo=0;sel=null;
- rng=Math.random;grid=makeBoard();upd();render()}
-$("mMove").onclick=()=>{if(!spendCoins(50))return;moves+=5;save();upd()};
-$("mShuffle").onclick=()=>{if(!spendCoins(30))return;grid=makeBoard();save();render()};
-$("mHint").onclick=()=>{if(!spendCoins(20))return;save();
- for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){const r2=r+dr,c2=c+dc;
-  if(r2>=N||c2>=N)continue;const a=grid[r][c];grid[r][c]=grid[r2][c2];grid[r2][c2]=a;
+  banner("УРОВЕНЬ ПРОЙДЕН!");flash();burst(r1,c1,"#ffb84d",26);
+  document.getElementById("m3hint").textContent="Уровень пройден! "+"⭐".repeat(stars)+" +"+(30+stars*20)+" 🪙";upd();return}
+ if(moves<=0){document.getElementById("m3hint").textContent="Ходы кончились. +5 ходов за рекламу или за 50 🪙"}}
+async function resolve(){let chain=0;
+ while(true){const m=findMatches(grid);if(!m.size)break;chain++;
+  comboUI(chain);
+  const gain=m.size*10*chain;score+=gain;upd();
+  let specialMade=null;let firstCell=null;
+  m.forEach(k=>{const p=k.split(",");const r=+p[0],c=+p[1];
+   grid[r][c]=-1;
+   if(!firstCell)firstCell={r,c};
+   burst(r,c,chain>1?"#ffb84d":"#ff4d8d",chain>2?18:10);
+   if(!specialMade&&m.size>=4&&rng()<0.45)specialMade={r,c};
+   if(!specialMade&&chain>=3&&rng()<0.18)specialMade={r,c}});
+  if(m.size>=5)flash();
+  if(chain>=2){banner("КОМБО ×"+chain);shake()}
+  if(firstCell)floatScore(firstCell.r,firstCell.c,"+"+gain,chain>1?"#ffb84d":"#ffffff");
+  render(m);await sleep(200);
+  gravity();render();await sleep(140);
+  if(specialMade){grid[specialMade.r][specialMade.c]=rng()<0.5?SPECIAL.BOMB:SPECIAL.RAINBOW;
+   burst(specialMade.r,specialMade.c,"#4ade80",20);render();await sleep(120)}
+ }
+ combo=0;comboUI(0);
+ if(!hasMove(grid)){grid=makeBoard();banner("ХОДОВ НЕТ");render()}
+ upd()}
+function gravity(){for(let c=0;c<N;c++){let w=N-1;for(let r=N-1;r>=0;r--)if(grid[r][c]!==-1){grid[w][c]=grid[r][c];if(w!==r)grid[r][c]=-1;w--}
+ for(let r=w;r>=0;r--)grid[r][c]=rnd(TYPES.length)}}
+function upd(){document.getElementById("moves").textContent=moves;
+ document.getElementById("goalTxt").textContent="цель: "+goal;
+ const sc=document.getElementById("score");if(sc)sc.textContent=score;
+ document.getElementById("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
+function levelSetup(){score=0;goal=Math.round(400*Math.pow(1.32,S.lvl-1));moves=20;combo=0;sel=null;dragFrom=null;
+ rng=Math.random;grid=makeBoard();comboUI(0);upd();render()}
+function startLevel(){if(S.lives<=0){document.getElementById("m3hint").textContent="Жизни кончились — посмотри рекламу в боте";return}
+ S.lives--;save();levelSetup()}
+function restartLevel(){levelSetup();document.getElementById("m3hint").textContent="Уровень перезапущен — жизни не списаны";}
+document.getElementById("mMove").onclick=()=>{if(!spendCoins(50))return;moves+=5;save();upd()};
+document.getElementById("mShuffle").onclick=()=>{if(!spendCoins(30))return;grid=makeBoard();save();banner("ПЕРЕМЕШАНО");render()};
+document.getElementById("mHint").onclick=()=>{if(!spendCoins(20))return;save();
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){
+  const r2=r+dr,c2=c+dc;if(r2>=N||c2>=N)continue;const a=grid[r][c];grid[r][c]=grid[r2][c2];grid[r2][c2]=a;
   const ok=findMatches(grid).size>0;const b=grid[r][c];grid[r][c]=grid[r2][c2];grid[r2][c2]=b;
-  if(ok){$("m3hint").textContent="Попробуй обменять эти два";return}}
- $("m3hint").textContent="Ходов нет — перемешаю";grid=makeBoard();render()};
-$("mLife").onclick=()=>{tg.sendData("buy:lives")};
-$("mReset").onclick=()=>{startLevel()};
+  if(ok){document.getElementById("m3hint").textContent="Попробуй обменять эти два";burst(r,c,"#4ade80",8);return}}
+ document.getElementById("m3hint").textContent="Ходов нет — перемешаю";grid=makeBoard();render()};
+document.getElementById("mLife").onclick=()=>{botCmd("buy:lives")};
+document.getElementById("mReset").onclick=()=>{restartLevel()};
 
 /* ---------- DAILY ---------- */
 function dailyIdx(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
@@ -287,11 +446,19 @@ function drawDaily(){const r=dailyIdx();const w=$("dBoard");w.innerHTML="";
 function rngPick(){const r=dailyIdx();const out=[];for(let i=0;i<8;i++)out.push(TYPES[Math.floor(r()*TYPES.length)]);return out}
 $("dStart").onclick=()=>{rng=seeded();score=0;goal=1200;moves=18;combo=0;sel=null;grid=makeBoard();upd();render();
  $("m3hint").textContent="Челлендж дня 🏆 — одинаковые задания у всех";document.querySelector('.tabs button[data-v=m3]').click()};
-$("dShare").onclick=()=>{tg.sendData("score:"+S.streak);toast("Скопируй результат и выложи в канал — получишь +20 🪙")};
+$("dShare").onclick=()=>{botCmd("score:"+S.streak);toast("Скопируй результат и выложи в канал — получишь +20 🪙")};
 
 /* ---------- boot ---------- */
 save();syncWallet();loadQuestion("random");drawDaily();
-$("ts").textContent="v1.0";
+/* Запускаем уровень «Три в ряд» сразу, чтобы доска не была пустой */
+(function bootMatch3(){
+  try{
+    score=0;goal=Math.round(400*Math.pow(1.32,S.lvl-1));moves=20;combo=0;sel=null;dragFrom=null;
+    rng=Math.random;grid=makeBoard();comboUI(0);upd();render();
+    document.getElementById("m3hint").textContent="Перетащи фигуру на соседнюю";
+  }catch(e){ document.getElementById("m3hint").textContent="Не удалось собрать поле"; }
+})();
+$("ts").textContent="v2.0";
 </script>
 </body>
 </html>
