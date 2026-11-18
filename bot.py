@@ -8,7 +8,8 @@ from aiogram.client.default import DefaultBotProperties
 
 BOT_TOKEN  = os.environ["BOT_TOKEN"]
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://podtekst-mz6thc2z.agent.mira.tg")
-CHANNEL    = "https://t.me/podtekst_game_bot"
+CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
+CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "-1004469511755")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logging.getLogger("aiogram").setLevel(logging.WARNING)
@@ -153,6 +154,21 @@ async def app_data(message: types.Message):
         await referral(message)
     elif data.startswith("score:"):
         await message.answer("Твой результат принят — 20 монет зачислены. Выложи результат в канале.")
+        await publish_score(message.from_user, data[6:])
+
+
+async def publish_score(user, result_text):
+    """Публикует результат игрока в канале (если бот — админ)."""
+    if not CHAT_ID:
+        return
+    name = user.first_name or "Игрок"
+    text = (f"\U0001F3AF <b>{name}</b> — результат: <b>{result_text}</b>\n"
+            f"Сыграть так же: {WEBAPP_URL}")
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="HTML",
+                               disable_web_page_preview=True)
+    except Exception as e:
+        logging.warning("publish_score failed: %s", e)
 
 def detect_base():
     """Определяем публичный адрес сервиса на разных платформах."""
