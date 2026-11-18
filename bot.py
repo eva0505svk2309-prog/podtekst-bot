@@ -51,15 +51,23 @@ def apply_referral(user_id, payload):
     a1["coins"] += 50
     a1["invited"] = a1.get("invited", 0) + 1
     a2["coins"] += 20
+    # Milestone: every 3 friends -> +100 coins to the inviter
+    milestone = a1["invited"] % 3 == 0
+    if milestone:
+        a1["coins"] += 100
     save_store(d)
-    return inviter
+    return (inviter, milestone)
 
 @dp.message(CommandStart())
 async def start(message: types.Message):
-    inviter = apply_referral(message.from_user.id, message.text.split()[-1] if message.text else "")
-    if inviter:
+    ref_result = apply_referral(message.from_user.id, message.text.split()[-1] if message.text else "")
+    if ref_result:
+        inviter, milestone = ref_result
         try:
-            await bot.send_message(inviter, "➕ Твой друг пришёл по твоей ссылке. +50 🪙 начислено!")
+            msg = "➕ Твой друг пришёл по твоей ссылке. +50 🪙 начислено!"
+            if milestone:
+                msg += "\n🎯 Третий друг! Бонус +100 🪙"
+            await bot.send_message(inviter, msg)
             await message.answer("🎁 Привет! Тебе +20 🪙 за то, что пришёл по ссылке друга.")
         except Exception as e:
             logging.warning("referral notify failed: %s", e)
@@ -74,9 +82,11 @@ async def referral(message: types.Message):
     link = f"https://t.me/{me.username}?start=ref{message.from_user.id}"
     d = load_store(); acc = acc_of(d, message.from_user.id)
     invited = acc.get("invited", 0)
+    left = 3 - (invited % 3) if invited % 3 else 3
     await message.answer(
         f"Твоя ссылка для друзей:\n{link}\n\n"
-        f"Каждому, кто зашёл по ней, — 50 монет. Приглашено: {invited}.\n"
+        f"Друг пришёл → тебе +50 🪙, ему +20 🪙.\n"
+        f"Приглашено: {invited}. До бонуса +100 🪙 осталось {left}.\n"
         "Бонус начисляется один раз за друга, автоматически.")
 
 @dp.message(Command("stars"))
