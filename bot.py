@@ -255,6 +255,22 @@ def acc_of(d, uid):
     acc.setdefault("streak", 0); acc.setdefault("best", 0); acc.setdefault("level", 1)
     acc.setdefault("charges", [])
     acc.setdefault("invited", 0)
+    acc.setdefault("lives_ts", 0)
+    return acc
+
+LIFE_REGEN_SEC = 1800  # одна жизнь каждые 30 минут
+
+def regen_lives(acc):
+    """Жизни восстанавливаются по времени, максимум 9."""
+    import time as _t
+    now = _t.time()
+    last = acc.get("lives_ts", now)
+    if acc["lives"] < 9:
+        gained = int((now - last) // LIFE_REGEN_SEC)
+        if gained > 0:
+            acc["lives"] = min(9, acc["lives"] + gained)
+            last += gained * LIFE_REGEN_SEC
+    acc["lives_ts"] = last
     return acc
 
 def wallet_view(acc):
@@ -276,7 +292,7 @@ async def api_wallet(request):
     uid = user_from_init(parts)
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
-    d = load_store(); acc = acc_of(d, uid); save_store(d)
+    d = load_store(); acc = acc_of(d, uid); regen_lives(acc); save_store(d)
     return web.json_response(wallet_view(acc))
 
 async def api_action(request):
@@ -292,7 +308,7 @@ async def api_action(request):
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
     action = body.get("action", "")
-    d = load_store(); acc = acc_of(d, uid)
+    d = load_store(); acc = acc_of(d, uid); regen_lives(acc)
 
     if action == "spend":
         # Клиент может только тратить, и только из своего баланса.
@@ -394,7 +410,7 @@ async def api_answer(request):
     else:
         acc["coins"] = max(0, acc["coins"] - 5)
         acc["streak"] = 0
-        acc["lives"] = max(0, acc["lives"] - 1)
+        acc["lives"] = max(1, acc["lives"] - 1)
     save_store(d)
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
                               "hint": q["h"], **wallet_view(acc)})
