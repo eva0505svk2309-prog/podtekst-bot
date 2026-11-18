@@ -543,8 +543,33 @@ def build_app(include_webhook=False):
     return app
 
 
+COMMANDS = [
+    types.BotCommand(command="start", description="Играть в ПОДТЕКСТ"),
+    types.BotCommand(command="buy", description="Купить монеты за Stars"),
+    types.BotCommand(command="stars", description="Цены на монеты и бонусы"),
+    types.BotCommand(command="referral", description="Ссылка для друзей"),
+    types.BotCommand(command="help", description="Список команд"),
+    types.BotCommand(command="paysupport", description="Помощь с оплатой"),
+]
+
+async def set_commands_once():
+    """Регистрация команд в меню бота. Раньше список вообще не выставлялся."""
+    for attempt in range(5):
+        try:
+            await bot.set_my_commands(COMMANDS)
+            logging.info("bot commands registered: %s", [c.command for c in COMMANDS])
+            return True
+        except Exception as e:
+            logging.warning("set_my_commands attempt %s failed: %s", attempt, e)
+            await asyncio.sleep(5)
+    return False
+
+
 async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
+    # Команды в меню бота выставляем при каждом старте: список должен
+    # восстановиться сам, даже если Telegram его сбросил.
+    await set_commands_once()
     mode = os.environ.get("MODE", "polling").lower()
     if mode == "webhook":
         port = int(os.environ.get("PORT", "8080"))
