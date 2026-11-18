@@ -1,5 +1,6 @@
 
 import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton,
@@ -404,7 +405,6 @@ async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
     mode = os.environ.get("MODE", "polling").lower()
     if mode == "webhook":
-        from aiohttp import web
         port = int(os.environ.get("PORT", "8080"))
         app = web.Application()
         async def webhook_handler(request):
