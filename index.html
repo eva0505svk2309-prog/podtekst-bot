@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>ПОДТЕКСТ</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#120a1e;color:#f4ecff;font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;min-height:100vh;padding:12px;display:flex;flex-direction:column;gap:10px;user-select:none}
+header{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.logo{font-weight:900;font-size:18px;margin-right:auto;letter-spacing:.5px}
+.logo span{background:linear-gradient(90deg,#ff4d8d,#a86bff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.pill{background:#25153f;border:1px solid #4a2f86;border-radius:999px;padding:6px 11px;font-weight:700;font-size:14px}
+.card{background:linear-gradient(160deg,#1e1134,#150c26);border:1px solid #3b2a63;border-radius:16px;padding:12px}
+.tabs{display:flex;gap:6px;background:#1c1030;padding:5px;border-radius:14px}
+.tabs button{flex:1;background:transparent;border:0;color:#a894d4;font-weight:800;font-size:14px;padding:9px 4px;border-radius:11px;cursor:pointer}
+.tabs button.on{background:linear-gradient(135deg,#ff4d8d,#a86bff);color:#fff}
+button{background:#241546;border:1px solid #4a2f86;color:#f4ecff;border-radius:12px;padding:12px 8px;font-size:15px;font-weight:700;cursor:pointer}
+button:active{transform:scale(.97)}
+button:disabled{opacity:.45}
+button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:transparent;color:#fff}
+.row{display:flex;gap:8px;margin-top:10px}
+.row>*{flex:1}
+.view{display:none}
+.view.on{display:block}
+#board{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;background:#0e0819;padding:6px;border-radius:14px}
+.cell{aspect-ratio:1;border-radius:10px;background:#241546;display:flex;align-items:center;justify-content:center;font-size:clamp(19px,6.6vw,32px)}
+.cell.sel{background:#3b2170;transform:scale(1.08)}
+.cell.pop{background:#7c3aed}
+#q{font-size:18px;font-weight:800;line-height:1.3;margin-bottom:10px}
+.opt{width:100%;text-align:left;margin-bottom:8px;font-weight:600}
+.opt.ok{background:#14532d;border-color:#22c55e;color:#dcfce7}
+.opt.no{background:#4c1d24;border-color:#f43f5e;color:#ffe4e6}
+.hint{font-size:13px;color:#a894d4;text-align:center;margin-top:8px}
+#bar{height:8px;background:#2b1d4a;border-radius:99px;overflow:hidden;margin:8px 0}
+#bar i{display:block;height:100%;background:linear-gradient(90deg,#ff4d8d,#ffb84d);width:0;transition:width .3s}
+#panel{text-align:center}
+#panel h2{font-size:20px;margin-bottom:6px}
+.small{font-size:12px;color:#a894d4;text-align:center}
+a{color:#c4b5fd}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">ПОД<span>ТЕКСТ</span></div>
+  <div class="pill">🪙 <span id="coins">0</span></div>
+  <div class="pill">🔥 <span id="streak">0</span></div>
+  <div class="pill">💗 <span id="lives">5</span></div>
+</header>
+
+<div class="tabs">
+  <button data-v="quiz" class="on">🎯 Квиз</button>
+  <button data-v="m3">🔷 Три в ряд</button>
+  <button data-v="day">🏆 День</button>
+</div>
+
+<!-- QUIZ -->
+<section class="view on" id="v-quiz">
+ <div class="card">
+  <div id="q">Загрузка…</div>
+  <div id="opts"></div>
+  <div class="hint" id="qhint"></div>
+ </div>
+ <div class="row">
+  <button id="qSkip">⏭ Пропустить</button>
+  <button id="qNext">➡️ Дальше</button>
+ </div>
+ <div class="row">
+  <button id="qBuy">🪙 Купить монеты</button>
+  <button id="qRef">👥 Пригласить</button>
+ </div>
+</section>
+
+<!-- MATCH3 -->
+<section class="view" id="v-m3">
+ <div class="card">
+  <div style="display:flex;justify-content:space-between;font-size:13px;color:#a894d4">
+   <span>Ур. <b id="lvl">1</b></span><span id="goalTxt">цель: 0</span><span>ходов: <b id="moves">20</b></span>
+  </div>
+  <div id="bar"><i></i></div>
+  <div id="board"></div>
+  <div class="hint" id="m3hint">Выбери тайл и соседний</div>
+ </div>
+ <div class="row">
+  <button id="mMove">+5 ходов · 50 🪙</button>
+  <button id="mShuffle">Перемешать · 30 🪙</button>
+  <button id="mLife">+1 жизнь · 200 ⭐</button>
+ </div>
+ <div class="row">
+  <button id="mHint">Подсказка · 20 🪙</button>
+  <button id="mReset">Заново</button>
+ </div>
+</section>
+
+<!-- DAILY -->
+<section class="view" id="v-day">
+ <div class="card">
+  <div id="dTitle" style="font-weight:800;font-size:18px;margin-bottom:6px">Челлендж дня 🏆</div>
+  <div id="dText" style="font-size:15px"></div>
+  <div id="dBoard" style="margin-top:10px"></div>
+ </div>
+ <div class="row">
+  <button class="pri" id="dStart">▶️ Играть челлендж</button>
+  <button id="dShare">📤 Поделиться</button>
+ </div>
+ <div class="hint" id="dhint">У всех одинаковые задания. Топ-10% получает бонус.</div>
+</section>
+
+<div class="small">18+ · <a href="https://t.me/podtekst_game_bot">канал</a> ·
+ <span id="ts"></span></div>
+
+<script>
+const tg=window.Telegram.WebApp;tg.expand();tg.enableClosingConfirmation();
+tg.setHeaderColor('#120a1e');tg.setBackgroundColor('#120a1e');
+const $=id=>document.getElementById(id);
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const toast=m=>{try{tg.showAlert(m)}catch(e){alert(m)}};
+
+/* ---------- wallet ---------- */
+const S={coins:+(localStorage.pt_coins||300),streak:+(localStorage.pt_streak||0),
+         lives:+(localStorage.pt_lives??5),lvl:+(localStorage.pt_lvl||1),best:+(localStorage.pt_best||0)};
+function save(){localStorage.pt_coins=S.coins;localStorage.pt_streak=S.streak;localStorage.pt_lives=S.lives;
+ localStorage.pt_lvl=S.lvl;localStorage.pt_best=S.best;
+ $("coins").textContent=S.coins;$("streak").textContent=S.streak;$("lives").textContent=S.lives;$("lvl").textContent=S.lvl;}
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('on'));
+ b.classList.add('on');
+ document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+ $('v-'+b.dataset.v).classList.add('on');
+});
+
+/* ---------- QUIZ ---------- */
+const Q=[
+ {q:"Он написал «ок» в 23:41. Это значит…",o:["Всё хорошо, спит","Что-то не так, но он не хочет говорить","Он в душе","Просто не заметил"],c:1,h:"23:41 — не время для «ок»."},
+ {q:"«Мне всё равно» + стикер с котом. Это…",o:["Ему реально всё равно","Он недоволен, но прячет это","Он отправляет котят всем подряд","Он грустный"],c:1,h:"Стикер = смягчение."},
+ {q:"Ты спрашиваешь «ты со мной?». Ответ: «да». Это…",o:["Точно да","Скорее да, но с сомнениями","Он не понял вопрос","Нет"],c:1,h:"Односложный «да» — классика."},
+ {q:"Голосовое на 4 минуты в ответ на «ты где?»",o:["Он раздражён","Он опаздывает и нервничает","У него проблемы","Ему нечего сказать"],c:1,h:"Ты спросила про «где», получила эссе."},
+ {q:"«Ладно, давай как скажешь». Это…",o:["Он реально так думает","Он раздражён и отдал выбор тебе","Ему всё равно","Он в восторге"],c:1,h:"«Как скажешь» = «делай сама, я не хочу»."},
+ {q:"Читает сообщения, отвечает через 4 часа",o:["Спит","Прокручивает ленту, но ты не настолько важна","Он на совещании","Забыл"],c:1,h:"Онлайн, но не в приоритете."},
+ {q:"«Мне нравится твой стиль». Это…",o:["Комплимент","Ирония","Просто вежливость","Просьба купить что-то"],c:1,h:"Слишком общо для комплимента."},
+ {q:"Фото с вечеринки, 6 подруг, ни тебя, ни подписи",o:["Он в восторге","Намекает на «а где ты»","Случайно","Это его сестра"],c:1,h:"Подпись — часть сообщения."},
+ {q:"Три часа тишины, потом «как ты?»",o:["Ему реально важно","Вспомнил, чтобы снять вину","Ему скучно","Ищет, с кем поговорить"],c:1,h:"Тайминг всё говорит."},
+ {q:"«Не переживай»",o:["Точно всё будет хорошо","Есть что скрывать","Он не знает, что сказать","Ему всё равно"],c:1,h:"Слова утешения = тревога."},
+ {q:"Он выбирает ресторан и шлёт ссылку на 40-е место",o:["Случайно","В восторге от выбора","Забыл","Проверяет, полезешь ли ты"],c:2,h:"Сороковое место — не ошибка."},
+ {q:"«Позвони, если что»",o:["Никогда не позвонит","Позвонит, если что случилось","Ждёт звонка прямо сейчас","Он занят"],c:2,h:"Фраза-отказ и фраза-приглашение одновременно."},
+ {q:"На «привет» отвечает через 40 минут «привет-привет»",o:["Был занят","Откладывал разговор","Ему неинтересно","Печатал одной рукой"],c:1,h:"Двойное «привет» = неловкость."},
+ {q:"Значок 💐 через 2 минуты после «увидимся в 8»",o:["Подарок","Отмена планов","Просто так","Наезд"],c:1,h:"Отмена планов редко приходит с цветами."},
+ {q:"Не спрашивала — сам прислал фото с отпуска",o:["Ему скучно без тебя","Показать, что там красиво без тебя","Просто делится","Хвастается"],c:0,h:"Пишет первым = ты в мыслях."},
+ {q:"«Может, лучше без меня?»",o:["Точно лучше с ним","Скрытая просьба остаться","Он реально думает так","Нет"],c:1,h:"Вопрос «может» — это просьба."},
+ {q:"Пересылает мем про бывших",o:["Просто мем","Намек на тебя","Грустит","Флиртует"],c:1,h:"Случайных мемов про бывших не бывает."},
+ {q:"Отвечает на голосовое голосовым на 12 минут",o:["Есть что сказать","Бесится","Хочет поговорить","Пересказывает историю"],c:0,h:"Ответ голосовым = диалог, а не спор."},
+ {q:"«Ты как?» — «нормально». В 2 часа ночи.",o:["Всё хорошо","Не очень","Не хочет отвечать","Не в дуге"],c:1,h:"Ночь — время честных ответов."},
+ {q:"Скидывает песню без комментария",o:["Просто поделился","Это о тебе","Хочет поговорить","Забыл"],c:1,h:"Песня = сообщение."},
+ {q:"«А помнишь, ты тогда сказала…» — про то, что ты забыла",o:["Хочет напомнить","Хочет поговорить о вас","Проверяет память","Собирается ссориться"],c:1,h:"Он помнит больше, чем ты."},
+ {q:"Предложил встретиться «на нейтральной территории»",o:["Нейтрально","Не хочет, чтобы ты шла к нему","Боится, что будет у тебя","Ему так удобнее"],c:1,h:"Нейтральная территория = зона комфорта."}
+];
+let qi=0,answered=false,timer=null,left=10;
+function showQ(i){qi=i;answered=false;left=10;const it=Q[i];
+ $("q").textContent=it.q;$("qhint").textContent="";$("opts").innerHTML="";
+ it.o.forEach((t,k)=>{const b=document.createElement("button");b.className="opt";b.textContent=t;
+  b.onclick=()=>pick(k,b);$("opts").appendChild(b);});
+ clearInterval(timer);$("q").style.opacity=1;
+ timer=setInterval(()=>{left-=0.1;if(left<=0){clearInterval(timer);pick(-1,null)}},100);
+}
+function pick(k,btn){if(answered)return;answered=true;clearInterval(timer);const it=Q[qi];
+ const good=k===it.c;[...$("opts").children].forEach((b,i)=>{if(i===it.c)b.classList.add("ok");
+  else if(i===k)b.classList.add("no");else b.disabled=true});
+ if(good){S.coins+=10;S.streak++;S.best=Math.max(S.best,S.streak);$("qhint").textContent="✅ Верно! +10 🪙 · серия "+S.streak;
+  if(S.streak%5===0){S.coins+=25;$("qhint").textContent+=" · бонус +25 🪙"}}
+ else{S.coins=Math.max(0,S.coins-5);S.streak=0;$("qhint").textContent="❌ Правильный: "+it.o[it.c]+" · −5 🪙"}
+ save();}
+$("qNext").onclick=()=>showQ(Math.floor(Math.random()*Q.length));
+$("qSkip").onclick=()=>{if(!answered)pick(-1,null)};
+$("qBuy").onclick=()=>{tg.sendData("buy")};
+$("qRef").onclick=()=>{tg.sendData("ref")};
+
+/* ---------- MATCH3 ---------- */
+const N=8,TYPES=['🍷','🍸','🌶️','💋','🍑','🧿'];
+let grid=[],sel=null,score=0,goal=0,moves=0,combo=0,busy=false,rng=Math.random;
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+ t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function seeded(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();return mulberry(k)}
+function rnd(n){return Math.floor(rng()*n)}
+function filled(){const g=[];for(let r=0;r<N;r++){g.push([]);for(let c=0;c<N;c++)g[r].push(-1)}return g}
+function findMatches(g){const s=new Set();
+ for(let r=0;r<N;r++){let run=1;for(let c=1;c<=N;c++){const same=c<N&&g[r][c]===g[r][c-1]&&g[r][c]!==-1;
+  if(same)run++;else{if(run>=3)for(let x=c-run;x<c;x++)s.add(r+','+x);run=1}}}
+ for(let c=0;c<N;c++){let run=1;for(let r=1;r<=N;r++){const same=r<N&&g[r][c]===g[r-1][c]&&g[r][c]!==-1;
+  if(same)run++;else{if(run>=3)for(let x=r-run;x<r;x++)s.add(x+','+c);run=1}}}
+ return s}
+function hasMove(g){for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){
+  const r2=r+dr,c2=c+dc;if(r2>=N||c2>=N)continue;const a=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=a;
+  const ok=findMatches(g).size>0;const b=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=b;if(ok)return true}return false}
+function makeBoard(){let g=filled();for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);
+ for(let i=0;i<50;i++){const m=findMatches(g);if(!m.size)break;m.forEach(k=>g[k.r][k.c]=rnd(TYPES.length))}
+ let guard=0;while(!hasMove(g)&&guard++<30){g=filled();for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);
+  for(let i=0;i<50;i++){const m=findMatches(g);if(!m.size)break;m.forEach(k=>g[k.r][k.c]=rnd(TYPES.length))}}
+ return g}
+function render(pop){const bd=$("board");bd.innerHTML="";
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++){const d=document.createElement("div");
+  d.className="cell"+(pop&&pop.has(r+','+c)?" pop":"")+(sel&&sel.r===r&&sel.c===c?" sel":"");
+  d.textContent=grid[r][c]===-1?"":TYPES[grid[r][c]];d.onclick=()=>tap(r,c);bd.appendChild(d)}}
+function gravity(){for(let c=0;c<N;c++){let w=N-1;for(let r=N-1;r>=0;r--)if(grid[r][c]!==-1){grid[w][c]=grid[r][c];if(w!==r)grid[r][c]=-1;w--}
+ for(let r=w;r>=0;r--)grid[r][c]=rnd(TYPES.length)}}
+async function resolve(){while(true){const m=findMatches(grid);if(!m.size)break;combo++;
+ const gain=m.size*10*combo;score+=gain;m.forEach(k=>grid[k.r][k.c]=-1);render(m);await sleep(220);
+ gravity();render();await sleep(150)}combo=0;if(!hasMove(grid))grid=makeBoard();upd()}
+function upd(){$("moves").textContent=moves;$("goalTxt").textContent="цель: "+goal;
+ $("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
+async function tap(r,c){if(busy)return;if(!sel){sel={r,c};render();return}
+ if(sel.r===r&&sel.c===c){sel=null;render();return}
+ const dr=Math.abs(sel.r-r),dc=Math.abs(sel.c-c);
+ if(dr+dc!==1){sel={r,c};render();return}
+ busy=true;const a=sel;sel=null;[grid[a.r][a.c],grid[r][c]]=[grid[r][c],grid[a.r][a.c]];
+ if(!findMatches(grid).size){[grid[a.r][a.c],grid[r][c]]=[grid[r][c],grid[a.r][a.c]];
+  $("m3hint").textContent="Так не выйдет 🙃";busy=false;render();return}
+ moves--;upd();await resolve();busy=false;
+ if(score>=goal){const left=moves,stars=left>=10?3:left>=5?2:1;S.coins+=30+stars*20;S.lvl++;save();
+  $("m3hint").textContent="Уровень пройден! ⭐".repeat(stars)+" +"+(30+stars*20)+" 🪙";upd();return}
+ if(moves<=0){$("m3hint").textContent="Ходы кончились. +5 ходов за рекламу или за 50 🪙";}}
+function startLevel(){if(S.lives<=0){$("m3hint").textContent="Жизни кончились — посмотри рекламу в боте";return}
+ S.lives--;save();score=0;goal=Math.round(400*Math.pow(1.32,S.lvl-1));moves=20;combo=0;sel=null;
+ rng=Math.random;grid=makeBoard();upd();render()}
+$("mMove").onclick=()=>{if(S.coins>=50){S.coins-=50;moves+=5;save();upd()}else toast("Мало монет")};
+$("mShuffle").onclick=()=>{if(S.coins>=30){S.coins-=30;grid=makeBoard();save();render()}else toast("Мало монет")};
+$("mHint").onclick=()=>{if(S.coins<20){toast("Мало монет");return}S.coins-=20;save();
+ for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){const r2=r+dr,c2=c+dc;
+  if(r2>=N||c2>=N)continue;const a=grid[r][c];grid[r][c]=grid[r2][c2];grid[r2][c2]=a;
+  const ok=findMatches(grid).size>0;const b=grid[r][c];grid[r][c]=grid[r2][c2];grid[r2][c2]=b;
+  if(ok){$("m3hint").textContent="Попробуй обменять эти два";return}}
+ $("m3hint").textContent="Ходов нет — перемешаю";grid=makeBoard();render()};
+$("mLife").onclick=()=>{tg.sendData("buy:lives")};
+$("mReset").onclick=()=>{startLevel()};
+
+/* ---------- DAILY ---------- */
+function dailyIdx(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
+ return mulberry(k)}
+function drawDaily(){const r=dailyIdx();const w=$("dBoard");w.innerHTML="";
+ const g=rngPick();g.forEach(t=>{const c=document.createElement("div");c.className="cell";c.textContent=t;w.appendChild(c)});
+ $("dTitle").textContent="Челлендж дня 🏆";$("dText").textContent="Собери "+TYPES[r%TYPES.length]+" в ряд 3 раза. Одинаковая доска у всех."}
+function rngPick(){const r=dailyIdx();const out=[];for(let i=0;i<8;i++)out.push(TYPES[Math.floor(r()*TYPES.length)]);return out}
+$("dStart").onclick=()=>{rng=seeded();score=0;goal=1200;moves=18;combo=0;sel=null;grid=makeBoard();upd();render();
+ $("m3hint").textContent="Челлендж дня 🏆 — одинаковые задания у всех";document.querySelector('.tabs button[data-v=m3]').click()};
+$("dShare").onclick=()=>{tg.sendData("score:"+S.streak);toast("Скопируй результат и выложи в канал — получишь +20 🪙")};
+
+/* ---------- boot ---------- */
+save();showQ(Math.floor(Math.random()*Q.length));drawDaily();
+$("ts").textContent="v1.0";
+</script>
+</body>
+</html>
