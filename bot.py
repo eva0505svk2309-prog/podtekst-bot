@@ -107,7 +107,8 @@ def grant(user_id, payload):
     d = load_store()
     u = str(user_id)
     acc = d.setdefault(u, {"coins": 0, "lives": 0, "noads": False, "charges": []})
-    if payload == "coins_100": acc["coins"] += 100
+    if payload == "test_1star": acc["coins"] += 1
+    elif payload == "coins_100": acc["coins"] += 100
     elif payload == "coins_500": acc["coins"] += 500
     elif payload == "lives": acc["lives"] += 1
     elif payload == "noads": acc["noads"] = True
@@ -191,7 +192,20 @@ async def main():
         from aiohttp import web
         port = int(os.environ.get("PORT", "8080"))
         app = web.Application()
-        app.router.add_post("/tg/{token}", dp.feed_update)
+        async def webhook_handler(request):
+            try:
+                data = await request.json()
+            except Exception:
+                return web.Response(status_code=400)
+            try:
+                update = types.Update.model_validate(data, context={"bot": bot})
+            except Exception as e:
+                logging.warning("bad update: %s", e)
+                return web.Response(status_code=400)
+            await dp.feed_update(bot, update)
+            return web.Response(text="ok")
+
+        app.router.add_post("/tg/{token}", webhook_handler)
         app.router.add_get("/health", lambda r: web.Response(text="ok"))
         runner = web.AppRunner(app)
         await runner.setup()
