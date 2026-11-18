@@ -415,6 +415,24 @@ async def api_answer(request):
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
                               "hint": q["h"], **wallet_view(acc)})
 
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
+
+async def api_admin_credit(request):
+    """Начисление монет по админ-секрету (используется для компенсаций)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    if not ADMIN_SECRET or body.get("secret") != ADMIN_SECRET:
+        return web.json_response({"error": "forbidden"}, status=403)
+    try:
+        uid = int(body.get("user_id"))
+        amount = int(body.get("amount"))
+    except Exception:
+        return web.json_response({"error": "bad params"}, status=400)
+    d = load_store(); acc = acc_of(d, uid); acc["coins"] = max(0, acc["coins"] + amount); save_store(d)
+    return web.json_response({"ok": True, **wallet_view(acc)})
+
 def detect_base():
     """Определяем публичный адрес сервиса на разных платформах."""
     base = os.environ.get("WEBHOOK_BASE", "").strip().rstrip("/")
@@ -454,6 +472,7 @@ async def main():
         app.router.add_post("/api/action", api_action)
         app.router.add_post("/api/quiz", api_quiz)
         app.router.add_post("/api/answer", api_answer)
+        app.router.add_post("/api/admin/credit", api_admin_credit)
 
         @web.middleware
         async def cors_mw(request, handler):
