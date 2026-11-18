@@ -288,7 +288,8 @@ def acc_of(d, uid):
     acc.setdefault("lives_ts", 0)
     return acc
 
-LIFE_REGEN_SEC = 1800  # одна жизнь каждые 30 минут
+LIFE_REGEN_SEC = 1800
+ANSWER_COOLDOWN = 3600  # один и тот же вопрос — раз в час  # одна жизнь каждые 30 минут
 
 def regen_lives(acc):
     """Жизни восстанавливаются по времени, максимум 9."""
@@ -424,9 +425,25 @@ async def api_answer(request):
     if idx < 0 or idx >= len(QUIZ_BANK):
         return web.json_response({"error": "bad question"}, status=400)
     q = QUIZ_BANK[idx]
+    if chosen < 0 or chosen >= len(q["o"]):
+        return web.json_response({"error": "bad choice"}, status=400)
     good = chosen == q["c"]
 
     d = load_store(); acc = acc_of(d, uid)
+
+    # Защита от повторной отправки ответа: один и тот же вопрос можно
+    # засчитать только раз в час, иначе монеты фармятся перезапросом.
+    answered = acc.setdefault("answered", {})
+    last = answered.get(str(idx))
+    now_ts = int(time.time())
+    if last and (now_ts - int(last)) < ANSWER_COOLDOWN:
+        return web.json_response({"ok": False, "error": "already answered",
+                                  **wallet_view(acc)})
+    answered[str(idx)] = now_ts
+    if len(answered) > 200:
+        for k in sorted(answered, key=lambda x: answered[x])[:100]:
+            answered.pop(k, None)
+
     if good:
         acc["coins"] += 10
         acc["streak"] += 1
@@ -482,44 +499,56 @@ async def on_error(event: ErrorEvent):
     """Любая ошибка хендлера не должна ронять polling-цикл."""
     logging.error("handler error: %s", event.exception, exc_info=event.exception)
 
+def build_app(include_webhook=False):
+    """Единая регистрация маршрутов для обоих режимов (polling и webhook).
+
+    Раньше API-маршруты жили только в ветке webhook, и в режиме polling
+    Mini App получал 404 на /api/quiz, /api/wallet и /api/action.
+    """
+    app = web.Application()
+
+    async def webhook_handler(request):
+        try:
+            data = await request.json()
+        except Exception:
+            return web.Response(status_code=400)
+        try:
+            update = types.Update.model_validate(data, context={"bot": bot})
+        except Exception as e:
+            logging.warning("bad update: %s", e)
+            return web.Response(status_code=400)
+        await dp.feed_update(bot, update)
+        return web.Response(text="ok")
+
+    if include_webhook:
+        app.router.add_post("/tg/{token}", webhook_handler)
+    app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    app.router.add_post("/api/wallet", api_wallet)
+    app.router.add_post("/api/action", api_action)
+    app.router.add_post("/api/quiz", api_quiz)
+    app.router.add_post("/api/answer", api_answer)
+    app.router.add_post("/api/admin/credit", api_admin_credit)
+
+    @web.middleware
+    async def cors_mw(request, handler):
+        if request.method == "OPTIONS":
+            return web.Response(status=204, headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type"})
+        resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    app.middlewares.append(cors_mw)
+    return app
+
+
 async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
     mode = os.environ.get("MODE", "polling").lower()
     if mode == "webhook":
         port = int(os.environ.get("PORT", "8080"))
-        app = web.Application()
-        async def webhook_handler(request):
-            try:
-                data = await request.json()
-            except Exception:
-                return web.Response(status_code=400)
-            try:
-                update = types.Update.model_validate(data, context={"bot": bot})
-            except Exception as e:
-                logging.warning("bad update: %s", e)
-                return web.Response(status_code=400)
-            await dp.feed_update(bot, update)
-            return web.Response(text="ok")
-
-        app.router.add_post("/tg/{token}", webhook_handler)
-        app.router.add_get("/health", lambda r: web.Response(text="ok"))
-        app.router.add_post("/api/wallet", api_wallet)
-        app.router.add_post("/api/action", api_action)
-        app.router.add_post("/api/quiz", api_quiz)
-        app.router.add_post("/api/answer", api_answer)
-        app.router.add_post("/api/admin/credit", api_admin_credit)
-
-        @web.middleware
-        async def cors_mw(request, handler):
-            if request.method == "OPTIONS":
-                return web.Response(status=204, headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type"})
-            resp = await handler(request)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-        app.middlewares.append(cors_mw)
+        app = build_app(include_webhook=True)
         runner = web.AppRunner(app)
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", port).start()
@@ -565,8 +594,9 @@ async def main():
         port = int(os.environ.get("PORT", "8080"))
 
         async def health_app():
-            app = web.Application()
-            app.router.add_get("/health", lambda r: web.Response(text="ok"))
+            # Тот же набор маршрутов, что и в webhook-режиме: Mini App
+            # обязан получать кошелёк и задания и в режиме polling.
+            app = build_app(include_webhook=False)
             runner = web.AppRunner(app)
             await runner.setup()
             site = web.TCPSite(runner, "0.0.0.0", port)
