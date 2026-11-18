@@ -4,7 +4,7 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton,
-                           WebAppInfo, PreCheckoutQuery, MenuButtonWebApp)
+                           WebAppInfo, PreCheckoutQuery, MenuButtonWebApp, ErrorEvent)
 from aiogram.client.default import DefaultBotProperties
 
 BOT_TOKEN  = os.environ["BOT_TOKEN"]
@@ -477,6 +477,11 @@ def detect_base():
     return ""
 
 
+@dp.errors()
+async def on_error(event: ErrorEvent):
+    """Любая ошибка хендлера не должна ронять polling-цикл."""
+    logging.error("handler error: %s", event.exception, exc_info=event.exception)
+
 async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
     mode = os.environ.get("MODE", "polling").lower()
@@ -555,7 +560,39 @@ async def main():
             except Exception as e:
                 logging.warning("webhook keepalive: %s", e)
     else:
-        await dp.start_polling(bot)
+        # В polling-режиме тоже нужен HTTP-сервер: Railway проверяет /health
+        # и перезапускает сервис, если healthcheck не отвечает.
+        port = int(os.environ.get("PORT", "8080"))
+
+        async def health_app():
+            app = web.Application()
+            app.router.add_get("/health", lambda r: web.Response(text="ok"))
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", port)
+            await site.start()
+            logging.info("health http server started on port %s", port)
+            while True:
+                await asyncio.sleep(3600)
+
+        # Polling с автоперезапуском: краш не должен убивать сервис.
+        async def run_polling_forever():
+            attempt = 0
+            while True:
+                try:
+                    attempt += 1
+                    await dp.start_polling(bot, drop_pending_updates=False)
+                    logging.info("polling finished, restarting")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    wait = min(60, 2 ** min(attempt, 5))
+                    logging.exception("polling failed (attempt %s): %s", attempt, e)
+                    await asyncio.sleep(wait)
+                else:
+                    attempt = 0
+
+        await asyncio.gather(health_app(), run_polling_forever())
 
 if __name__ == "__main__":
     asyncio.run(main())
