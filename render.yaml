@@ -9,9 +9,13 @@ services:
     envVars:
       - key: MODE
         value: webhook
-      - key: WEBHOOK_BASE
-        sync: false
-      - key: BOT_TOKEN
-        sync: false
       - key: WEBAPP_URL
         value: https://podtekst-mz6thc2z.agent.mira.tg
+      - key: STORE_PATH
+        value: /data/store.json
+      - key: BOT_TOKEN
+        sync: false
+    disk:
+      name: podtekst-data
+      mountPath: /data
+      sizeGB: 1
