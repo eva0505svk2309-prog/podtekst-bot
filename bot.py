@@ -234,6 +234,17 @@ def validate_init_data(init_data: str):
     secret = hmac.new(b"WebAppData", BOT_TOKEN.encode("utf-8"), hashlib.sha256).digest()
     calc = hmac.new(secret, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(calc, received):
+        # Диагностика: пишем, что именно пришло (маскируем хеш)
+        try:
+            import logging as _lg
+            _lg.warning("INITDATA_MISMATCH keys=%s dc_len=%d dc_head=%r received_head=%r calc=%s alt_sha=%s raw=%r",
+                        sorted(parts.keys()), len(data_check), data_check[:120],
+                        received[:16], calc[:16],
+                        hmac.new(hashlib.sha256(BOT_TOKEN.encode()).digest(),
+                                 data_check.encode("utf-8"), hashlib.sha256).hexdigest()[:16],
+                        init_data[:400])
+        except Exception:
+            pass
         return None
     try:
         auth_date = int(parts.get("auth_date", "0"))
