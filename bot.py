@@ -60,7 +60,21 @@ def apply_referral(user_id, payload):
 
 @dp.message(CommandStart())
 async def start(message: types.Message):
-    ref_result = apply_referral(message.from_user.id, message.text.split()[-1] if message.text else "")
+    payload = (message.text.split()[-1] if message.text else "") or ""
+    # Deep-link команды из Mini App: /start buy | buys | ref | lives | noads
+    if payload in ("buy", "buys"):
+        await send_invoice(message.chat.id, "coins_100")
+        return
+    if payload == "buy:lives":
+        await send_invoice(message.chat.id, "lives")
+        return
+    if payload == "buy:noads":
+        await send_invoice(message.chat.id, "noads")
+        return
+    if payload == "ref":
+        await referral(message)
+        return
+    ref_result = apply_referral(message.from_user.id, payload)
     if ref_result:
         inviter, milestone = ref_result
         try:
