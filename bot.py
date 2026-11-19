@@ -1,5 +1,5 @@
 
-import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse
+import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse, datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -592,6 +592,112 @@ async def set_commands_once():
     return False
 
 
+
+# ============ ЕЖЕДНЕВНЫЙ КОНТЕНТ ДЛЯ КАНАЛА ============
+# Канал живёт на контенте: без ежедневных постов подписываться не на что.
+# Формат — разбор фразы с голосованием: читатель угадывает подтекст прямо
+# в канале, а потом идёт играть в бота. Это и контент, и вовлечение.
+
+DAILY_POSTS = [
+    ("\"Мне всё равно\" — и стикер с котом. Что он имел в виду?",
+     ["\"Мне всё равно, но я звонил три раза\"",
+      "\"Мне всё равно. Скинь на карту, скину завтра\"",
+      "\"Мне всё равно, просто я обиделся\""],
+     "По контексту — первое. Если бы было всё равно, не звонил бы три раза.",
+     "А вы как читаете такие фразы? Проверьте себя в игре — там 4 варианта и только один верный."),
+
+    ("\"Ничего страшного\" — на 3:47 ночи.",
+     ["\"Ничего страшного, но я жду звонка\"",
+      "\"Ничего страшного, я серьёзно\"",
+      "\"Ничего страшного, давай не сегодня\""],
+     "Второе. Третье — отмазка, первое — просьба.",
+     "Угадали? В игре такие фразы разбираются по уровням — от простых к злым."),
+
+    ("\"Мне не холодно, но куртку можешь забрать\".",
+     ["\"Мне не холодно, но куртку можешь забрать\"",
+      "\"Мне не холодно. Просто куртку забери\"",
+      "\"Мне не холодно, но давай обнимемся\""],
+     "Третье. Первое — приглашение, хоть и замаскированное.",
+     "Подтекст — это когда фраза говорит одно, а значит совсем другое."),
+
+    ("\"Не переживай, я не обижаюсь\".",
+     ["\"Не переживай, я не обижаюсь\"",
+      "\"Не переживай, я обижаюсь, но не на тебя\"",
+      "\"Не переживай, просто я обиделся и ухожу\""],
+     "Второе или третье — тут все врут. В игре за это дают монеты.",
+     "Есть ежедневный челлендж: одинаковые задания у всех игроков. Сравни свой результат."),
+
+    ("\"Я просто говорю\".",
+     ["\"Я просто говорю, но ты не понял\"",
+      "\"Я просто говорю, не обращай внимания\"",
+      "\"Я просто говорю. И это неправда\""],
+     "Третье. Классика: «просто говорю» = «говорю намеками».",
+     "Хотите больше таких фраз? Играйте в ПОДТЕКСТ — каждый день новые."),
+]
+
+_poll_state = {}
+
+async def publish_daily_post():
+    """Публикует ежедневный пост-разбор фразы с голосованием в канале."""
+    if not CHAT_ID:
+        return
+    idx = int(time.time() // 86400) % len(DAILY_POSTS)
+    question, options, answer, teaser = DAILY_POSTS[idx]
+    try:
+        msg = await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(f"\U0001F9E0 <b>Что он имел в виду?</b>\n\n"
+                  f"{question}\n\n"
+                  f"1\. {options[0]}\n"
+                  f"2\. {options[1]}\n"
+                  f"3\. {options[2]}\n\n"
+                  f"\U0001F3AF Голосуйте, правильный ответ — в комментариях завтра.\n\n"
+                  f"{teaser}\n\n"
+                  f"\U0001F3AE <a href=\"{CHANNEL}\">Канал</a> · "
+                  f"<a href=\"https://t.me/podtekst_game_bot\">Играть</a>"),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="1️⃣", callback_data="vote:1"),
+                 InlineKeyboardButton(text="2️⃣", callback_data="vote:2"),
+                 InlineKeyboardButton(text="3️⃣", callback_data="vote:3")],
+                [InlineKeyboardButton(text="\U0001F3AE Играть", url=WEBAPP_URL)],
+            ]))
+        _poll_state["msg_id"] = msg.message_id
+        logging.info("daily post published: %s", msg.message_id)
+    except Exception as e:
+        logging.warning("publish_daily_post failed: %s", e)
+
+async def daily_poster_loop():
+    """Публикует пост раз в сутки в 11:00 МСК + перезапуск при падении."""
+    while True:
+        try:
+            MSK = datetime.timezone(datetime.timedelta(hours=3))
+            now = datetime.datetime.now(MSK)
+            # ближайшие 11:00 по московскому времени
+            target = now.replace(hour=11, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target += datetime.timedelta(days=1)
+            await asyncio.sleep((target - now).total_seconds())
+            await publish_daily_post()
+            await asyncio.sleep(86400)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logging.warning("daily poster loop: %s", e)
+            await asyncio.sleep(300)
+
+@dp.callback_query()
+async def on_vote(call: types.CallbackQuery):
+    """Голосование в ежедневном посте."""
+    if not call.data or not call.data.startswith("vote:"):
+        return
+    choice = call.data.split(":")[1]
+    try:
+        await call.answer(f"\U0001F3AF Твой выбор: {choice}. Ответ завтра в канале!", show_alert=False)
+    except Exception as e:
+        logging.warning("on_vote failed: %s", e)
+
+
 async def main():
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL)))
     # Команды в меню бота выставляем при каждом старте: список должен
@@ -674,7 +780,7 @@ async def main():
                 else:
                     attempt = 0
 
-        await asyncio.gather(health_app(), run_polling_forever())
+        await asyncio.gather(health_app(), run_polling_forever(), daily_poster_loop())
 
 if __name__ == "__main__":
     asyncio.run(main())
