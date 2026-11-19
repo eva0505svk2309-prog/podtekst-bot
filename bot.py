@@ -18,6 +18,12 @@ if "?" not in WEBAPP_URL:
 elif "v=" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}&v={BUILD}"
 CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
+def html_escape(s: str) -> str:
+    """Экранирует спецсимволы HTML — иначе имя игрока ломает разметку."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
 CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "-1004469511755")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -225,17 +231,38 @@ async def app_data(message: types.Message):
 
 
 async def publish_score(user, result_text):
-    """Публикует результат игрока в канале (если бот — админ)."""
+    """Публикует результат игрока в канале (если бот — админ) и платит 20 монет.
+
+    Раньше бот обещал 20 монет, но не начислял их — теперь платит, но с
+    защитой от накрутки: бонус один раз в сутки на аккаунт.
+    """
     if not CHAT_ID:
         return
     name = user.first_name or "Игрок"
-    text = (f"\U0001F3AF <b>{name}</b> — результат: <b>{result_text}</b>\n"
+    safe = html_escape(str(result_text)[:40])
+    text = (f"\U0001F3AF <b>{html_escape(name)}</b> — результат: <b>{safe}</b>\n"
             f"Сыграть так же: {WEBAPP_URL}")
+
+    # Бонус за шеринг: один раз в сутки, чтобы нельзя было фармить кнопкой.
+    bonus = 0
+    try:
+        d = load_store()
+        acc = acc_of(d, user.id)
+        today = datetime.date.today().isoformat()
+        if acc.get("share_bonus_day") != today:
+            acc["share_bonus_day"] = today
+            acc["coins"] += 20
+            bonus = 20
+            save_store(d)
+    except Exception as e:
+        logging.warning("share bonus failed: %s", e)
+
     try:
         await bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="HTML",
                                disable_web_page_preview=True)
     except Exception as e:
         logging.warning("publish_score failed: %s", e)
+    return bonus
 
 
 # ---------------- Mini App API: серверный кошелёк ----------------
