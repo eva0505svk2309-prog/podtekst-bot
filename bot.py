@@ -24,6 +24,11 @@ CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
 MIRA_REF   = os.environ.get("MIRA_REF", "8684637509")
 MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
 PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
+# Deep-link: открыть Mira с уже подставленным вопросом (черновик в поле ввода).
+def mira_link(text):
+    import urllib.parse as _up
+    return f"https://t.me/mira?text={_up.quote(text[:240])}"
+
 PROMO_TITLE = "🤖 Mira — ИИ, который тебя понимает"
 PROMO_TEXT  = ("Mira — твой персональный ИИ в Telegram: отвечает на вопросы, "
                "пишет тексты, разбирает фото и помогает с проектами. "
@@ -139,6 +144,15 @@ async def mira_cmd(message: types.Message):
         f"Твоя ссылка:\n{MIRA_URL}\n\n"
         f"Подключи Mira и возвращайся в игру — начислю <b>+{PROMO_REWARD} 🪙</b> "
         "(один раз).", reply_markup=kb())
+
+@dp.message(Command("mira"))
+async def mira_cmd2(message: types.Message):
+    await message.answer(
+        f"{PROMO_TITLE}\n\n{PROMO_TEXT}\n\n"
+        f"Твоя ссылка:\n{MIRA_URL}\n\n"
+        f"Подключи Mira и возвращайся в игру — начислю <b>+{PROMO_REWARD} 🪙</b> (один раз).\n\n"
+        "Разобрать свою фразу: отправь её сюда сообщением — я подскажу, что в ней скрыто.",
+        reply_markup=kb())
 
 @dp.message(Command("stars"))
 async def stars(message: types.Message):
@@ -878,6 +892,12 @@ async def api_promo_click(request):
     d = load_store(); acc = acc_of(d, uid)
     d.setdefault("_promo", {"clicks": 0, "claims": 0})
     d["_promo"]["clicks"] = int(d["_promo"].get("clicks", 0)) + 1
+    try:
+        src = str(body.get("source", "profile"))[:24]
+    except Exception:
+        src = "profile"
+    bs = d["_promo"].setdefault("by_source", {})
+    bs[src] = int(bs.get(src, 0)) + 1
     save_store(d)
     return web.json_response({"ok": True})
 
@@ -908,6 +928,58 @@ async def api_promo_claim(request):
     return web.json_response({"ok": True, "reward": PROMO_REWARD,
                               "coins": acc.get("coins", 0),
                               "lives": acc.get("lives", 5)})
+
+
+async def api_mira_hint(request):
+    """Игрок просит подсказку/разбор у Mira — отдаём deep-link с подставленным текстом."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    try:
+        q = str(body.get("q", ""))[:200]
+    except Exception:
+        q = ""
+    d = load_store(); acc = acc_of(d, uid)
+    promo = acc.setdefault("promo", {})
+    d.setdefault("_promo", {"clicks": 0, "claims": 0, "by_source": {}})
+    src = str(body.get("source", "quiz"))[:24]
+    bs = d["_promo"].setdefault("by_source", {})
+    bs[src] = int(bs.get(src, 0)) + 1
+    save_store(d)
+    if q:
+        prompt = (f"Разбери подтекст этой фразы и объясни, что человек на самом деле имел в виду. "
+                  f"Дай 4 варианта ответа, один верный. Фраза: «{q}»")
+    else:
+        prompt = ("Придумай 5 фраз с подтекстом для игры-квиза про скрытый смысл "
+                  "(что человек имел в виду на самом деле). Без пояснений, только фразы.")
+    return web.json_response({"ok": True, "url": mira_link(prompt),
+                              "reward": PROMO_REWARD, "claimed": bool(promo.get("claimed"))})
+
+
+async def api_promo_stats(request):
+    """Статистика по рекламным местам — какое место приносит больше кликов."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store()
+    p = d.get("_promo", {}) or {}
+    return web.json_response({"ok": True, "clicks": int(p.get("clicks", 0)),
+                              "claims": int(p.get("claims", 0)),
+                              "by_source": p.get("by_source", {}) or {}})
 
 
 async def api_visit(request):
@@ -1003,6 +1075,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo", api_promo)
     app.router.add_post("/api/promo/click", api_promo_click)
     app.router.add_post("/api/promo/claim", api_promo_claim)
+    app.router.add_post("/api/mira/hint", api_mira_hint)
+    app.router.add_post("/api/promo/stats", api_promo_stats)
 
     @web.middleware
     async def cors_mw(request, handler):
