@@ -313,6 +313,10 @@ def acc_of(d, uid):
     acc.setdefault("charges", [])
     acc.setdefault("invited", 0)
     acc.setdefault("lives_ts", 0)
+    acc.setdefault("m3", {"lvl": 1, "score": 0, "moves": 20, "best": 0,
+                          "plays": 0, "garland": 0, "combo": 0,
+                          "maxcombo": 0, "total": 0, "cleared": 0})
+    acc.setdefault("ach", [])
     return acc
 
 LIFE_REGEN_SEC = 1800
@@ -489,6 +493,145 @@ async def api_answer(request):
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
                               "hint": q["h"], **wallet_view(acc)})
 
+
+# ---------------- Mini App API: прогресс match-3 + профиль ----------------
+# Счётчик уровня и очки считает СЕРВЕР: клиент присылает только факт игры,
+# а сервер сам решает, засчитать ли уровень и сколько монет дать.
+M3_BASE_GOAL = 400
+M3_GOAL_GROWTH = 1.32
+M3_MAX_MOVES = 20
+M3_GARLAND_MAX = 10
+
+def m3_goal(level):
+    try:
+        lv = max(1, int(level))
+    except Exception:
+        lv = 1
+    return int(round(M3_BASE_GOAL * (M3_GOAL_GROWTH ** (lv - 1))))
+
+ACHIEVEMENTS = [
+    ("first_light",  "🎄 Первая гирлянда",  "Зажги 10 ламп за один заход"),
+    ("combo5",       "⚡ Комбо ×5",        "Собери цепочку из 5 совпадений"),
+    ("combo8",       "🔥 Комбо ×8",        "Собери цепочку из 8 совпадений"),
+    ("level5",       "⭐ Уровень 5",       "Пройди 5 уровней"),
+    ("level10",      "👑 Уровень 10",      "Пройди 10 уровней"),
+    ("m3_10k",       "💎 10 000 очков",    "Набери 10 000 очков в match-3"),
+    ("m3_50k",       "🏆 50 000 очков",    "Набери 50 000 очков в match-3"),
+    ("all_lamps",    "🌟 Все лампы",       "Собери гирлянду 10 раз"),
+    ("quiz10",       "🎯 Квиз ×10",        "10 верных ответов подряд"),
+    ("streak7",      "🔥 Неделя",          "7 дней подряд заходи в игру"),
+]
+
+def m3_view(acc):
+    m = acc.get("m3") or {}
+    return {"m3": {"lvl": m.get("lvl", 1), "score": m.get("score", 0),
+                   "moves": m.get("moves", M3_MAX_MOVES), "best": m.get("best", 0),
+                   "plays": m.get("plays", 0), "garland": m.get("garland", 0),
+                   "lamps": m.get("lamps", 0),
+                   "combo": m.get("combo", 0), "maxcombo": m.get("maxcombo", 0),
+                   "total": m.get("total", 0), "cleared": m.get("cleared", 0)},
+            "goal": m3_goal(m.get("lvl", 1)),
+            "ach": acc.get("ach", []),
+            "unlocked": sorted(ACHIEVEMENTS, key=lambda a: a[0])}
+
+def unlock(acc, key):
+    """Открывает достижение один раз и возвращает True, если оно новое."""
+    got = acc.setdefault("ach", [])
+    if key in got:
+        return False
+    got.append(key)
+    return True
+
+async def api_m3(request):
+    """Сохранение прогресса match-3. Сервер проверяет всё, что можно проверить."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+
+    action = body.get("action", "save")
+    d = load_store(); acc = acc_of(d, uid)
+    m = acc.setdefault("m3", {"lvl": 1, "score": 0, "moves": M3_MAX_MOVES, "best": 0,
+                              "plays": 0, "garland": 0, "combo": 0, "maxcombo": 0,
+                              "total": 0, "cleared": 0})
+
+    def num(key, default=0, lo=0, hi=10 ** 9):
+        try:
+            v = int(body.get(key, default))
+        except Exception:
+            return default
+        return max(lo, min(hi, v))
+
+    if action == "save":
+        level = num("level", m.get("lvl", 1), 1, 9999)
+        score = num("score", 0, 0, 10 ** 9)
+        moves = num("moves", M3_MAX_MOVES, 0, M3_MAX_MOVES)
+        garland = num("garland", 0, 0, 10 ** 7)      # всего гирлянд за всё время
+        lamps = num("lamps", 0, 0, M3_GARLAND_MAX)    # ламп в текущей гирлянде
+        combo = num("combo", 0, 0, 99)
+        maxcombo = num("maxcombo", 0, 0, 99)
+        plays = num("plays", 0, 0, 10 ** 7)
+
+        # Уровень нельзя пропустить: можно играть только на текущем или уже открытом.
+        cur = int(m.get("lvl", 1))
+        if level > cur + 1:
+            level = cur + 1
+        # Очки не могут превышать разумный предел для одного уровня.
+        cap = m3_goal(level) * 4
+        if score > cap:
+            score = cap
+
+        m["score"] = score
+        m["moves"] = moves
+        m["garland"] = max(int(m.get("garland", 0)), garland)
+        m["lamps"] = max(int(m.get("lamps", 0)), lamps)
+        m["maxcombo"] = max(int(m.get("maxcombo", 0)), maxcombo)
+        m["plays"] = max(int(m.get("plays", 0)), plays)
+
+        # Уровень засчитывается сервером: только если хватает очков.
+        goal = m3_goal(cur)
+        if score >= goal and cur == level:
+            stars = 3 if moves >= 10 else (2 if moves >= 5 else 1)
+            acc["coins"] += 30 + stars * 20
+            m["cleared"] = int(m.get("cleared", 0)) + 1
+            m["total"] = int(m.get("total", 0)) + score
+            m["best"] = max(int(m.get("best", 0)), score)
+            m["lvl"] = cur + 1
+            m["score"] = 0
+            m["moves"] = M3_MAX_MOVES
+            unlock(acc, "level5") if m["lvl"] >= 5 else None
+            unlock(acc, "level10") if m["lvl"] >= 10 else None
+            if m["total"] >= 10000: unlock(acc, "m3_10k")
+            if m["total"] >= 50000: unlock(acc, "m3_50k")
+            if int(m.get("garland", 0)) >= 10: unlock(acc, "all_lamps")
+            save_store(d)
+            return web.json_response({"ok": True, "levelup": True, "stars": stars,
+                                      "reward": 30 + stars * 20, **wallet_view(acc),
+                                      **m3_view(acc)})
+
+        if combo >= 5: unlock(acc, "combo5")
+        if combo >= 8: unlock(acc, "combo8")
+        if lamps >= M3_GARLAND_MAX: unlock(acc, "first_light")
+        if int(m.get("garland", 0)) >= 10: unlock(acc, "all_lamps")
+        if int(m.get("best", 0)) == 0 and score > 0:
+            m["best"] = score
+        save_store(d)
+        return web.json_response({"ok": True, "levelup": False, **wallet_view(acc), **m3_view(acc)})
+
+    if action == "profile":
+        save_store(d)
+        return web.json_response({"ok": True, **wallet_view(acc), **m3_view(acc)})
+
+    save_store(d)
+    return web.json_response({"ok": False, "error": "unknown action", **wallet_view(acc)})
+
+
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
 async def api_admin_credit(request):
@@ -555,6 +698,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/quiz", api_quiz)
     app.router.add_post("/api/answer", api_answer)
     app.router.add_post("/api/admin/credit", api_admin_credit)
+    app.router.add_post("/api/m3", api_m3)
 
     @web.middleware
     async def cors_mw(request, handler):
