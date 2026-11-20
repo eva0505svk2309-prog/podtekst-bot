@@ -131,6 +131,28 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
 
 
 /* ---------- PROFILE v3 ---------- */
+#retStrip{display:flex;gap:5px;justify-content:center;margin:8px 0 4px}
+.rchip{flex:1;height:42px;border-radius:11px;background:#16203a;border:1px solid #2f4568;
+ display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative}
+.rchip .d{font-size:9px;color:#9fb6d4;letter-spacing:.3px}
+.rchip .ic{font-size:16px;line-height:1.1;margin-top:2px}
+.rchip.on{background:linear-gradient(160deg,#2f9e44,#17612a);border-color:#3fbb5f}
+.rchip.on .d{color:#cfeeda}
+.rchip.today{outline:2px solid var(--xmas-gold);outline-offset:1px}
+.rchip .cnt{position:absolute;top:-6px;right:-4px;background:var(--xmas-red);color:#fff;
+ font-size:9px;font-weight:900;border-radius:99px;padding:1px 5px}
+#streakBox{display:flex;align-items:center;justify-content:space-between;gap:8px;
+ background:#131c30;border:1px solid #2f4568;border-radius:12px;padding:9px 11px;margin-top:8px}
+#streakBox .big{font-size:24px;font-weight:900;color:var(--xmas-gold);line-height:1}
+#streakBox .lbl{font-size:11px;color:#9fb6d4;margin-top:2px}
+#visitPop{position:fixed;left:50%;top:18%;transform:translateX(-50%);z-index:9999;
+ background:linear-gradient(150deg,#1f6f3a,#0d3d22);border:1px solid #3fbb5f;border-radius:16px;
+ padding:14px 18px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.6);display:none;animation:pop .45s ease}
+#visitPop .t{font-size:26px;font-weight:900;color:#d8ffe0}
+#visitPop .s{font-size:12px;color:#a8e6bb;margin-top:4px}
+@keyframes pop{from{opacity:0;transform:translateX(-50%) scale(.8)}to{opacity:1;transform:translateX(-50%) scale(1)}}
+.nyflag{font-size:13px;background:linear-gradient(90deg,#c62828,#1b5e20,#b8860b);
+ color:#fff;border-radius:99px;padding:2px 9px;font-weight:800;margin-left:6px}
 #profileGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
 .pcard{background:#131c30;border:1px solid #2f4568;border-radius:14px;padding:10px;text-align:center}
 .pcard .n{font-size:20px;font-weight:900;color:var(--xmas-gold);line-height:1.1}
@@ -216,7 +238,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
 </header>
 
 <div class="tabs tabwrap">
-  <button data-v="quiz" class="on">🎯 Квиз</button>
+  <button data-v="quiz" class="on">🎯 Квиз<span class="nyflag">NEW</span></button>
   <button data-v="m3">🎄 Три в ряд</button>
   <button data-v="day">🏆 День</button>
   <button data-v="profile">👤 Профиль<span id="newBadge">NEW</span></button>
@@ -274,12 +296,17 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
  </div>
 </section>
 
+<div id="visitPop"><div class="t">+20 🪙</div><div class="s">День 1 подряд</div></div>
 <!-- PROFILE -->
 <section class="view" id="v-profile">
  <div id="keepCard">
   <div class="t">🎄 Твоя ёлка горит</div>
   <div class="d" id="keepText">Зажги гирлянду — каждая лампа зажигается длиннее цепочкой. Собери все 10 — получишь фейерверк и +500 очков.</div>
-  <div id="dailyStrip"></div>
+  <div id="retStrip"></div>
+  <div id="streakBox">
+   <div><div class="big" id="stDays">0</div><div class="lbl">серия дней</div></div>
+   <div style="text-align:right"><div class="big" id="stTotalDays" style="font-size:16px">0</div><div class="lbl">всего дней в игре</div></div>
+  </div>
   <div class="small" id="keepSub" style="margin-top:6px">Заходи каждый день — гирлянда горит дольше</div>
  </div>
  <div class="card" style="margin-bottom:10px">
@@ -376,7 +403,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
  $('v-'+b.dataset.v).classList.add('on');
  if(b.dataset.v==='m3' && (!grid || !grid.length)){ try{ startLevel(); }catch(e){} }
- if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); }
+ if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); }
 });
 
 /* ---------- QUIZ (server-authoritative) ---------- */
@@ -386,7 +413,10 @@ async function loadQuestion(mode){
   if(!INIT){ // без Telegram — локальный запасной вариант
     const Q=[{q:"Он написал «ок» в 23:41. Это значит…",o:["Всё хорошо, спит","Что-то не так, но он не хочет говорить","Он в душе","Просто не заметил"],c:1,h:"23:41 — не время для «ок»."},
              {q:"«Позвони, если что»",o:["Никогда не позвонит","Позвонит, если что случилось","Ждёт звонка прямо сейчас","Он занят"],c:1,h:"Фраза-отказ и фраза-приглашение одновременно."},
-             {q:"Не спрашивала — сам прислал фото с отпуска",o:["Ему скучно без тебя","Показать, что там красиво без тебя","Просто делится","Хвастается"],c:0,h:"Пишет первым = ты в мыслях."}];
+             {q:"Не спрашивала — сам прислал фото с отпуска",o:["Ему скучно без тебя","Показать, что там красиво без тебя","Просто делится","Хвастается"],c:0,h:"Пишет первым = ты в мыслях."},
+             {q:"31 декабря, 23:50. Он пишет «ты где?»",o:["Случайно — праздник","Проверяет, будешь ли ты с ним","Ищет, кого позвать в полночь","Ему нечего делать"],c:1,h:"Новый год не отменяет подтексты."},
+             {q:"Голосовое в 00:03, 40 секунд, смех",o:["Веселился","Пил","Записывал приветствие","Хочет поговорить с тобой"],c:3,h:"Он выбрал звонок тебе."},
+             {q:"Фотка ёлки с подписью «одна без тебя»",o:["Просто фото","Намёк на тебя","Жалуется","Хвастается"],c:1,h:"«Одна» — ключевое слово."}];
     const it=Q[Math.floor(Math.random()*Q.length)];
     curQ=it;qi=-1;qOpts=it.o;renderQ();return;
   }
@@ -704,6 +734,44 @@ async function flushSave(){
  renderProfile();
 }
 
+/* ===== RETENTION: серверная серия дней ===== */
+let ret={day_streak:0,days_total:0,calendar:[],day_reward:20};
+
+async function registerVisit(){
+ if(!INIT)return null;
+ try{
+  const r=await fetch(API+"/api/visit",{method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({init_data:INIT})});
+  const j=await r.json();
+  if(j&&j.ok){
+   ret=j;
+   if(typeof j.coins==="number"){S.coins=j.coins;S.lives=j.lives;paint();}
+   if(j.new_day){
+    const p=$("visitPop");
+    if(p){p.querySelector(".t").textContent="+"+j.reward+" 🪙";
+     p.querySelector(".s").textContent="День "+j.streak+" подряд · заходи завтра снова!";
+     p.style.display="block";setTimeout(()=>{p.style.display="none"},3200);
+     try{tg.HapticFeedback.notificationOccurred("success");}catch(e){}
+    }
+   }
+   renderProfile();
+  }
+  return j;
+ }catch(e){return null;}
+}
+
+function renderRetStrip(){
+ const w=$("retStrip");if(!w||!ret.calendar)return;w.innerHTML="";
+ const today=ret.calendar.length?ret.calendar[ret.calendar.length-1].d:"";
+ ret.calendar.forEach(c=>{
+  const d=document.createElement("div");
+  d.className="rchip"+(c.on?" on":"")+(c.d===today?" today":"");
+  const dt=new Date(c.d+"T00:00:00");
+  d.innerHTML='<div class="d">'+dt.getDate()+'.'+(dt.getMonth()+1)+'</div><div class="ic">'+(c.on?"🎄":"❄️")+'</div>';
+  w.appendChild(d);
+ });
+}
+
 /* ===== PROFILE ===== */
 const ACH_LIST=[
  ["first_light","🎄","Первая гирлянда","Зажги 10 ламп за один заход"],
@@ -725,6 +793,9 @@ function renderProfile(){
   $("stGarland").textContent=m3.garland||0;
   $("stCombo").textContent=m3.maxcombo||0;
   $("stTotal").textContent=m3.total||0;
+  $("stDays").textContent=ret.day_streak||0;
+  $("stTotalDays").textContent=ret.days_total||0;
+  renderRetStrip();
   const w=$("achList");if(!w)return;w.innerHTML="";
   ACH_LIST.forEach(a=>{
    const got=achGot.indexOf(a[0])>=0;
@@ -799,6 +870,7 @@ $("pShare").onclick=function(){
 /* ---------- boot ---------- */
 save();syncWallet();loadQuestion("random");drawDaily();
 m3Api("profile").then(()=>{ try{goal=m3Goal(m3.lvl||1);upd();renderProfile();}catch(e){} });
+registerVisit();
 /* Запускаем уровень «Три в ряд» сразу, чтобы доска не была пустой */
 (function bootMatch3(){
   try{
