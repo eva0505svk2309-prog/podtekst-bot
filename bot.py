@@ -19,6 +19,15 @@ if "?" not in WEBAPP_URL:
 elif "v=" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}&v={BUILD}"
 CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
+
+# ---- Партнёрский блок Mira: игрок получает монеты в игре, мы — токены Миры ----
+MIRA_REF   = os.environ.get("MIRA_REF", "8684637509")
+MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
+PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
+PROMO_TITLE = "🤖 Mira — ИИ, который тебя понимает"
+PROMO_TEXT  = ("Mira — твой персональный ИИ в Telegram: отвечает на вопросы, "
+               "пишет тексты, разбирает фото и помогает с проектами. "
+               "Поставь её рядом с ПОДТЕКСТОМ — и подтексты будут разгадываться вдвое быстрее.")
 def html_escape(s: str) -> str:
     """Экранирует спецсимволы HTML — иначе имя игрока ломает разметку."""
     return (str(s).replace("&", "&amp;").replace("<", "&lt;")
@@ -37,6 +46,7 @@ def kb():
         [InlineKeyboardButton(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="Челлендж дня", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="Канал", url=CHANNEL)],
+        [InlineKeyboardButton(text="🤖 Mira — твой ИИ в Telegram", url=MIRA_URL)],
     ])
 
 PACKS = {
@@ -105,7 +115,9 @@ async def start(message: types.Message):
     await message.answer(
         "<b>ПОДТЕКСТ</b>\n\nОн сказал «ок» — а что он имел в виду на самом деле?\n\n"
         "Квиз с подтекстом · Три в ряд · Челлендж дня у всех одинаковый.\n\n"
-        "Играй — и не тормози.", reply_markup=kb())
+        "Играй — и не тормози.\n\n"
+        f"🤖 Нужен ИИ-помощник в Telegram? Забери Mira по ссылке и получи "
+        f"<b>+{PROMO_REWARD} 🪙</b> в игре:\n{MIRA_URL}", reply_markup=kb())
 
 @dp.message(Command("referral"))
 async def referral(message: types.Message):
@@ -120,6 +132,14 @@ async def referral(message: types.Message):
         f"Приглашено: {invited}. До бонуса +100 🪙 осталось {left}.\n"
         "Бонус начисляется один раз за друга, автоматически.")
 
+@dp.message(Command("mira"))
+async def mira_cmd(message: types.Message):
+    await message.answer(
+        f"{PROMO_TITLE}\n\n{PROMO_TEXT}\n\n"
+        f"Твоя ссылка:\n{MIRA_URL}\n\n"
+        f"Подключи Mira и возвращайся в игру — начислю <b>+{PROMO_REWARD} 🪙</b> "
+        "(один раз).", reply_markup=kb())
+
 @dp.message(Command("stars"))
 async def stars(message: types.Message):
     await message.answer("Пакеты монет (Telegram Stars):\n\n"
@@ -128,7 +148,9 @@ async def stars(message: types.Message):
 
 @dp.message(Command("help"))
 async def help_(message: types.Message):
-    await message.answer("/start — играть\n/buy — купить монеты\n/stars — цены\n/referral — ссылка для друзей",
+    await message.answer("/start — играть\n/buy — купить монеты\n/stars — цены\n"
+                         "/referral — ссылка для друзей\n"
+                         "/mira — ИИ-помощник Mira + бонус в игре",
                          reply_markup=kb())
 
 @dp.message(Command("buy"))
@@ -817,6 +839,77 @@ async def api_referral(request):
                               **wallet_view(acc)})
 
 
+async def api_promo(request):
+    """Статистика партнёрского блока Mira + состояние «забрал ли игрок бонус»."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    promo = acc.setdefault("promo", {})
+    d.setdefault("_promo", {"clicks": 0, "claims": 0})
+    claimed = bool(promo.get("claimed"))
+    return web.json_response({
+        "ok": True, "title": PROMO_TITLE, "text": PROMO_TEXT, "url": MIRA_URL,
+        "reward": PROMO_REWARD, "claimed": claimed,
+        "clicks": int(d["_promo"].get("clicks", 0)),
+        "claims": int(d["_promo"].get("claims", 0)),
+    })
+
+
+async def api_promo_click(request):
+    """Игрок нажал «подключить Mira» — считаем клик для статистики."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    d.setdefault("_promo", {"clicks": 0, "claims": 0})
+    d["_promo"]["clicks"] = int(d["_promo"].get("clicks", 0)) + 1
+    save_store(d)
+    return web.json_response({"ok": True})
+
+
+async def api_promo_claim(request):
+    """Игрок вернулся из Mira — выдаём +50 🪙. Один раз за аккаунт."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    promo = acc.setdefault("promo", {})
+    if promo.get("claimed"):
+        return web.json_response({"ok": False, "already": True,
+                                 "coins": acc.get("coins", 0)})
+    acc["coins"] = int(acc.get("coins", 0)) + PROMO_REWARD
+    promo["claimed"] = True
+    promo["ts"] = int(time.time())
+    d.setdefault("_promo", {"clicks": 0, "claims": 0})
+    d["_promo"]["claims"] = int(d["_promo"].get("claims", 0)) + 1
+    save_store(d)
+    return web.json_response({"ok": True, "reward": PROMO_REWARD,
+                              "coins": acc.get("coins", 0),
+                              "lives": acc.get("lives", 5)})
+
+
 async def api_visit(request):
     """Регистрация визита: сервер считает серию дней и платит за неё."""
     try:
@@ -907,6 +1000,9 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/m3", api_m3)
     app.router.add_post("/api/visit", api_visit)
     app.router.add_post("/api/referral", api_referral)
+    app.router.add_post("/api/promo", api_promo)
+    app.router.add_post("/api/promo/click", api_promo_click)
+    app.router.add_post("/api/promo/claim", api_promo_claim)
 
     @web.middleware
     async def cors_mw(request, handler):
