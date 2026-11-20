@@ -26,8 +26,11 @@ MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
 PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
 # Deep-link: открыть Mira с уже подставленным вопросом (черновик в поле ввода).
 def mira_link(text):
+    """Ссылка на Mira: реферальный параметр (даёт токены) + подставленный текст (черновик).
+    Реферал обязателен: без start= дохода не будет."""
     import urllib.parse as _up
-    return f"https://t.me/mira?text={_up.quote(text[:240])}"
+    return (f"https://t.me/mira?start=ref_{MIRA_REF}"
+            f"&text={_up.quote(text[:240])}")
 
 PROMO_TITLE = "🤖 Mira — ИИ, который тебя понимает"
 PROMO_TEXT  = ("Mira — твой персональный ИИ в Telegram: отвечает на вопросы, "
