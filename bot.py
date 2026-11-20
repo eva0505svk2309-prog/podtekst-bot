@@ -24,6 +24,8 @@ CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
 MIRA_REF   = os.environ.get("MIRA_REF", "8684637509")
 MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
 PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
+MISS_PENALTY_PCT = 10      # % от монет за пропуск дня (фишка Major)
+SUB_REWARD = 50            # 🪙 за подписку на канал (фишка Notcoin)
 # Deep-link: открыть Mira с уже подставленным вопросом (черновик в поле ввода).
 def mira_link(text):
     """Ссылка на Mira: реферальный параметр (даёт токены) + подставленный текст (черновик).
@@ -139,6 +141,32 @@ async def referral(message: types.Message):
         f"Друг пришёл → тебе +50 🪙, ему +20 🪙.\n"
         f"Приглашено: {invited}. До бонуса +100 🪙 осталось {left}.\n"
         "Бонус начисляется один раз за друга, автоматически.")
+
+@dp.message(Command("subscribe"))
+async def subscribe_cmd(message: types.Message):
+    """Игрок жмёт кнопку — проверяем подписку на канал и платим разово."""
+    if not CHAT_ID:
+        await message.answer("Канал пока не настроен."); return
+    try:
+        member = await bot.get_chat_member(CHAT_ID, message.from_user.id)
+        st = getattr(member, "status", "")
+    except Exception:
+        st = ""
+    if st not in ("member", "administrator", "creator", "restricted"):
+        await message.answer(f"Сначала подпишись на канал: {CHANNEL}\n\n"
+                             f"Потом нажми кнопку ещё раз — и получишь "
+                             f"<b>+{SUB_REWARD} 🪙</b>.")
+        return
+    d = load_store(); acc = acc_of(d, message.from_user.id)
+    sub = acc.setdefault("channel_sub", {"claimed": False})
+    if sub.get("claimed"):
+        await message.answer("Бонус за подписку уже получен 🙂"); return
+    acc["coins"] = int(acc.get("coins", 0) or 0) + SUB_REWARD
+    sub["claimed"] = True; sub["ts"] = int(time.time())
+    save_store(d)
+    await message.answer(f"🎉 Подписка засчитана! <b>+{SUB_REWARD} 🪙</b> начислено.",
+                         reply_markup=kb())
+
 
 @dp.message(Command("mira"))
 async def mira_cmd(message: types.Message):
@@ -444,9 +472,16 @@ def register_visit(acc):
             days.pop(k, None)
     last = acc.get("last_day", "")
     streak = int(acc.get("day_streak", 0))
+    penalty = 0
     if last and last == day_shift(t, -1):
         streak += 1
     else:
+        # Фишка Major: пропуск дня обнуляет серию и отнимает часть монет.
+        if last and streak > 1:
+            lost = int(acc.get("coins", 0) or 0) * MISS_PENALTY_PCT // 100
+            if lost > 0:
+                acc["coins"] = int(acc.get("coins", 0) or 0) - lost
+                penalty = lost
         streak = 1
     acc["day_streak"] = streak
     acc["last_day"] = t
@@ -458,7 +493,7 @@ def register_visit(acc):
     acc["coins"] += reward
     if streak >= 7:
         unlock(acc, "streak7")
-    return True, reward, streak
+    return True, reward, streak, penalty
 
 LIFE_REGEN_SEC = 1800
 ANSWER_COOLDOWN = 3600  # один и тот же вопрос — раз в час  # одна жизнь каждые 30 минут
@@ -1014,6 +1049,46 @@ def _lb_rows(d, limit=20):
     return rows[:limit]
 
 
+async def api_channel_sub(request):
+    """Игрок подписался на канал — проверяем через get_chat_member и платим разово."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    if not CHAT_ID:
+        return web.json_response({"ok": True, "subscribed": False, "reward": 0,
+                                  "already": True})
+    # проверяем подписку
+    member = None
+    try:
+        member = await bot.get_chat_member(CHAT_ID, uid)
+    except Exception as e:
+        logging.warning("get_chat_member failed: %s", e)
+        return web.json_response({"ok": True, "subscribed": False, "reward": 0,
+                                  "check_failed": True})
+    st = getattr(member, "status", "")
+    subscribed = st in ("member", "administrator", "creator", "restricted")
+    if not subscribed:
+        return web.json_response({"ok": True, "subscribed": False, "reward": 0})
+    d = load_store(); acc = acc_of(d, uid)
+    sub = acc.setdefault("channel_sub", {"claimed": False})
+    if sub.get("claimed"):
+        return web.json_response({"ok": True, "subscribed": True, "reward": 0,
+                                  "already": True, **wallet_view(acc)})
+    acc["coins"] = int(acc.get("coins", 0) or 0) + SUB_REWARD
+    sub["claimed"] = True
+    sub["ts"] = int(time.time())
+    save_store(d)
+    return web.json_response({"ok": True, "subscribed": True, "reward": SUB_REWARD,
+                              **wallet_view(acc)})
+
+
 async def api_leaderboard(request):
     """Топ игроков — конкуренция и повод вернуться в игру."""
     try:
@@ -1104,10 +1179,11 @@ async def api_visit(request):
     except Exception:
         pass
     regen_lives(acc)
-    is_new, reward, streak = register_visit(acc)
+    is_new, reward, streak, penalty = register_visit(acc)
     save_store(d)
     return web.json_response({"ok": True, "new_day": is_new, "reward": reward,
-                              "streak": streak, **wallet_view(acc),
+                              "streak": streak, "penalty": penalty,
+                              **wallet_view(acc),
                               **retention_view(acc), **m3_view(acc)})
 
 
@@ -1187,6 +1263,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/stats", api_promo_stats)
     app.router.add_post("/api/leaderboard", api_leaderboard)
     app.router.add_post("/api/share/score", api_share_score)
+    app.router.add_post("/api/channel/sub", api_channel_sub)
 
     @web.middleware
     async def cors_mw(request, handler):
