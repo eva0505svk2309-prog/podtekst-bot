@@ -985,6 +985,104 @@ async def api_promo_stats(request):
                               "by_source": p.get("by_source", {}) or {}})
 
 
+def _lb_rows(d, limit=20):
+    """Собираем топ игроков по сумме очков: квиз-серия + уровень три-в-ряд + уровень."""
+    rows = []
+    for uid, acc in d.items():
+        if not isinstance(acc, dict) or uid.startswith("_"):
+            continue
+        try:
+            qs = int(acc.get("quiz_streak", 0) or 0)
+            best = int(acc.get("best", 0) or 0)
+            lvl = int(acc.get("level", 1) or 1)
+            m3 = acc.get("m3", {}) or {}
+            m3lvl = int(m3.get("lvl", 1) or 1)
+            m3best = int(m3.get("best", 0) or 0)
+            days = len(acc.get("days", {}) or {})
+        except Exception:
+            continue
+        score = qs * 100 + best + lvl * 20 + m3lvl * 50 + m3best // 10 + days * 30
+        if score <= 0:
+            continue
+        name = acc.get("name") or ""
+        if not name:
+            name = f"Игрок {str(uid)[-4:]}"
+        rows.append({"uid": str(uid), "name": str(name)[:28],
+                     "score": score, "streak": qs, "level": lvl,
+                     "m3lvl": m3lvl, "days": days})
+    rows.sort(key=lambda r: -r["score"])
+    return rows[:limit]
+
+
+async def api_leaderboard(request):
+    """Топ игроков — конкуренция и повод вернуться в игру."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store()
+    rows = _lb_rows(d)
+    mine = None
+    for i, r in enumerate(rows):
+        if r["uid"] == str(uid):
+            mine = {**r, "place": i + 1}
+            break
+    if mine is None:
+        acc = acc_of(d, uid)
+        mine = {"uid": str(uid), "name": "Ты",
+                "score": int(acc.get("quiz_streak", 0) or 0) * 100,
+                "streak": int(acc.get("quiz_streak", 0) or 0),
+                "level": int(acc.get("level", 1) or 1),
+                "m3lvl": int((acc.get("m3", {}) or {}).get("lvl", 1) or 1),
+                "days": len(acc.get("days", {}) or {}), "place": None}
+    return web.json_response({"ok": True, "top": rows, "me": mine,
+                              "total": max(1, len(rows))})
+
+
+async def api_share_score(request):
+    """Игрок отправляет свой результат — бот публикует пост в канал (с пометкой «реклама»/«игра»)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    try:
+        streak = int(acc.get("quiz_streak", 0) or 0)
+        days = int(acc.get("day_streak", 0) or 0)
+    except Exception:
+        streak = days = 0
+    d.setdefault("_shares", [])
+    shares = d["_shares"]
+    shares.append({"uid": str(uid), "streak": streak, "days": days,
+                    "ts": int(time.time())})
+    del shares[:-200]
+    save_store(d)
+    txt = (f"🔥 <b>Рекорд в ПОДТЕКСТЕ</b>\n\n"
+           f"Серия в квизе: <b>{streak}</b> подряд · заходов: <b>{days}</b> дней\n\n"
+           f"А сколько подтекстов разгадаешь ты?\n"
+           f"Играть: <a href=\"https://t.me/{BOT_USERNAME}\">@podtekst_game_bot</a>\n\n"
+           f"🤖 Спроси Mira, если застрял: {MIRA_URL}")
+    try:
+        await bot.send_message(CHAT_ID, txt, parse_mode="HTML",
+                               disable_web_page_preview=True)
+        return web.json_response({"ok": True, "posted": True})
+    except Exception as e:
+        logging.warning("share post failed: %s", e)
+        return web.json_response({"ok": True, "posted": False})
+
+
 async def api_visit(request):
     """Регистрация визита: сервер считает серию дней и платит за неё."""
     try:
@@ -998,6 +1096,13 @@ async def api_visit(request):
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
     d = load_store(); acc = acc_of(d, uid)
+    try:
+        u = json.loads(parts.get("user", "{}"))
+        fn = str(u.get("first_name") or "")[:28]
+        if fn and not acc.get("name"):
+            acc["name"] = fn
+    except Exception:
+        pass
     regen_lives(acc)
     is_new, reward, streak = register_visit(acc)
     save_store(d)
@@ -1080,6 +1185,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/claim", api_promo_claim)
     app.router.add_post("/api/mira/hint", api_mira_hint)
     app.router.add_post("/api/promo/stats", api_promo_stats)
+    app.router.add_post("/api/leaderboard", api_leaderboard)
+    app.router.add_post("/api/share/score", api_share_score)
 
     @web.middleware
     async def cors_mw(request, handler):
