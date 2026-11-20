@@ -1,39 +1,30 @@
-# ПОДТЕКСТ — Telegram Mini App бот
+# ПОДТЕКСТ — Telegram Mini App
 
-Игра-квиз «подтекст» + match-3 18+ в виде Telegram Mini App.
-Mini App: https://podtekst-mz6thc2z.agent.mira.tg
-Бот: @podtekst_game_bot
+Игра про то, что человек на самом деле имел в виду.
 
-## Деплой на Railway (один клик)
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/eva0505svk2309-prog/podtekst-bot)
-
-Либо вручную: New Project -> Deploy from GitHub Repo -> выбрать этот репозиторий.
-Railway прочитает railway.json сам (start command, healthcheck, restart policy).
-
-## Переменные окружения (обязательно задать в Railway -> Variables)
-
-| Ключ | Значение |
-|---|---|
-| BOT_TOKEN | токен от @BotFather |
-| WEBAPP_URL | https://podtekst-mz6thc2z.agent.mira.tg |
-| MODE | polling |
-| STORE_PATH | /data/store.json |
-
-Volume: создайте volume на /data, иначе кошелёк игроков сбросится при передеплое.
-
-## Локально
-
+## Запуск
     pip install -r requirements.txt
     export BOT_TOKEN=...
-    export WEBAPP_URL=...
-    export MODE=polling
+    export WEBAPP_URL=https://podtekst-mz6thc2z.agent.mira.tg
+    export BUILD_ID=7
     python bot.py
 
-## Команды бота
+## Переменные окружения (Railway, environment production)
+- BOT_TOKEN — токен @BotFather (в коде токена НЕТ, только os.environ)
+- WEBAPP_URL — https://podtekst-mz6thc2z.agent.mira.tg
+- BUILD_ID — 7 (добавляется к ссылке как ?v=)
+- CHANNEL_CHAT_ID — -1004469511755
+- ADMIN_SECRET — секрет для /api/admin/credit
+- DATA_DIR — /data (постоянное хранилище кошельков игроков)
 
-/start, /buy, /stars, /balance, /referral, /testpay, /refundlast, /paysupport, /help
+## Структура
+- bot.py — бот, 22 API-эндпоинта Mini App, Stars-оплата, планировщик постов
+- index.html — Mini App (квиз, три в ряд, ежедневный челлендж, профиль)
 
-## Оплата
-
-Telegram Stars (XTR), provider_token пустой — цифровой товар, внешний провайдер не нужен.
+## Проверено 20.11.2026
+- Railway деплой SUCCESS, /health -> ok
+- домены: podtekst-bot-production.up.railway.app (основной)
+- гейт 18+, квиз (вердикт + штраф -5), три в ряд (уровень 1, цель 400),
+  челлендж дня, профиль (гирлянда, топ, шеринг) — ошибок JS нет
+- канал @podtekst_game: 6 постов, описание, закреп
+- init_data валидируется HMAC-SHA256 на каждом эндпоинте
