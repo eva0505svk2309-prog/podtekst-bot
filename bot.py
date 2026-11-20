@@ -69,6 +69,8 @@ def apply_referral(user_id, payload):
     milestone = a1["invited"] % 3 == 0
     if milestone:
         a1["coins"] += 100
+        # каждые 3 приглашённых — ещё и жизнь: рефералка мотивирует не только монетами
+        a1["lives"] = min(9, int(a1.get("lives", 5)) + 1)
     save_store(d)
     return (inviter, milestone)
 
@@ -507,8 +509,22 @@ QUIZ_BANK = QUIZ_BANK + NY_QUESTIONS
 
 _daily_state = {}
 
+def ny_offset():
+    """Индекс, с которого новогодние вопросы лежат в общем QUIZ_BANK.
+
+    Новогодние вопросы добавлены в конец банка, поэтому их индексы в
+    QUIZ_BANK глобальные — ответы в /api/answer остаются валидными.
+    """
+    return len(QUIZ_BANK) - len(NY_QUESTIONS)
+
+
 def daily_pick(uid):
-    """Один и тот же вопрос на день для всех игроков."""
+    """Один и тот же вопрос на день для ВСЕХ игроков.
+
+    Индекс зависит только от даты: без uid у каждого игрока был бы свой
+    «челлендж дня», хотя обещано одно и то же задание.
+    В декабре и январе — новогодний банк, в остальное время — общий.
+    """
     d = None
     try:
         d = os.environ.get("DAILY_QUESTION_DATE")
@@ -517,9 +533,18 @@ def daily_pick(uid):
     if not d:
         import datetime
         d = datetime.date.today().isoformat()
-    key = f"{uid}:{d}"
+    key = f"daily:{d}"
     if key not in _daily_state:
-        idx = int(hashlib.sha256(f"{d}:{uid}".encode()).hexdigest(), 16) % len(QUIZ_BANK)
+        h = int(hashlib.sha256(d.encode()).hexdigest(), 16)
+        try:
+            mm = int(d[5:7])
+        except Exception:
+            mm = 0
+        off = ny_offset()
+        if mm in (12, 1) and NY_QUESTIONS:
+            idx = off + (h % len(NY_QUESTIONS))
+        else:
+            idx = h % (off if off else len(QUIZ_BANK))
         _daily_state[key] = idx
     return _daily_state[key]
 
@@ -535,9 +560,20 @@ async def api_quiz(request):
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
     mode = body.get("mode", "random")
-    idx = daily_pick(uid) if mode == "daily" else random.randrange(len(QUIZ_BANK))
+    daily = (mode == "daily")
+    idx = daily_pick(uid) if daily else random.randrange(len(QUIZ_BANK))
     q = QUIZ_BANK[idx]
-    return web.json_response({"id": idx, "q": q["q"], "o": q["o"]})
+    d = load_store(); acc = acc_of(d, uid)
+    chal = acc.setdefault("daily", {})
+    today = today_key()
+    if chal.get("date") != today:
+        chal["date"] = today
+        chal["done"] = 0
+    chal["streak"] = int(chal.get("streak", 0))
+    save_store(d)
+    return web.json_response({"id": idx, "q": q["q"], "o": q["o"],
+                              "daily": daily, "daily_done": int(chal.get("done", 0)),
+                              "daily_streak": chal["streak"]})
 
 async def api_answer(request):
     """Проверка ответа и начисление очков — только на сервере."""
@@ -578,10 +614,24 @@ async def api_answer(request):
         for k in sorted(answered, key=lambda x: answered[x])[:100]:
             answered.pop(k, None)
 
+    # Челлендж дня засчитывается один раз в сутки
+    chal = acc.setdefault("daily", {})
+    today = today_key()
+    if chal.get("date") != today:
+        chal["date"] = today
+        chal["done"] = 0
+        chal["streak"] = int(chal.get("streak", 0)) + 1 if chal.get("last") == day_shift(today, -1) else 1
+    chal["last"] = today
+
     if good:
         acc["coins"] += 10
         acc["streak"] += 1
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
+        if not chal.get("done"):
+            chal["done"] = 1
+            acc["coins"] += 30
+            if int(chal.get("streak", 0)) >= 3:
+                acc["coins"] += 50
         if acc["quiz_streak"] >= 10:
             unlock(acc, "quiz10")
             acc["coins"] += 50
@@ -641,7 +691,10 @@ def m3_view(acc):
             "goal": m3_goal(m.get("lvl", 1)),
             "ach": acc.get("ach", []),
             "unlocked": sorted(ACHIEVEMENTS, key=lambda a: a[0]),
-            **retention_view(acc)}
+            **retention_view(acc),
+            "daily": {"done": int((acc.get("daily") or {}).get("done", 0)),
+                      "streak": int((acc.get("daily") or {}).get("streak", 0)),
+                      "date": (acc.get("daily") or {}).get("date", "")}}
 
 def unlock(acc, key):
     """Открывает достижение один раз и возвращает True, если оно новое."""
@@ -741,6 +794,28 @@ async def api_m3(request):
     return web.json_response({"ok": False, "error": "unknown action", **wallet_view(acc)})
 
 
+async def api_referral(request):
+    """Статистика рефералки: сколько приглашено и сколько до бонуса."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    invited = int(acc.get("invited", 0))
+    left = 3 - (invited % 3) if invited % 3 else 3
+    link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}"
+    save_store(d)
+    return web.json_response({"ok": True, "invited": invited, "left": left,
+                              "link": link, "bonus": 50, "new_bonus": 20,
+                              **wallet_view(acc)})
+
+
 async def api_visit(request):
     """Регистрация визита: сервер считает серию дней и платит за неё."""
     try:
@@ -830,6 +905,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/admin/credit", api_admin_credit)
     app.router.add_post("/api/m3", api_m3)
     app.router.add_post("/api/visit", api_visit)
+    app.router.add_post("/api/referral", api_referral)
 
     @web.middleware
     async def cors_mw(request, handler):
