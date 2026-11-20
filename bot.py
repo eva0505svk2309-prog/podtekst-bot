@@ -13,7 +13,7 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "podtekst_game_bot")
 
 # Принудительное обновление Mini App: меняем версию при каждом деплое,
 # иначе Telegram WebView отдаёт закэшированную старую страницу.
-BUILD = os.environ.get("BUILD_ID", "4")
+BUILD = os.environ.get("BUILD_ID", "5")
 if "?" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}?v={BUILD}"
 elif "v=" not in WEBAPP_URL:
@@ -391,6 +391,9 @@ def acc_of(d, uid):
     acc.setdefault("day_streak", 0)
     acc.setdefault("last_day", "")
     acc.setdefault("quiz_streak", 0)
+    acc.setdefault("cards", {})        # rarity -> {card_id: count}
+    acc.setdefault("cards_opened", 0)
+    acc.setdefault("tourney", {"score": 0, "week": ""})
     return acc
 
 
@@ -701,6 +704,7 @@ async def api_answer(request):
     if good:
         acc["coins"] += 10
         acc["streak"] += 1
+        tourney_add(d, acc, 10)
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
         if not chal.get("done"):
             chal["done"] = 1
@@ -839,6 +843,7 @@ async def api_m3(request):
             m["cleared"] = int(m.get("cleared", 0)) + 1
             m["total"] = int(m.get("total", 0)) + score
             m["best"] = max(int(m.get("best", 0)), score)
+            tourney_add(d, acc, max(0, score) // 10)
             m["lvl"] = cur + 1
             m["score"] = 0
             m["moves"] = M3_MAX_MOVES
@@ -1187,6 +1192,236 @@ async def api_visit(request):
                               **retention_view(acc), **m3_view(acc)})
 
 
+
+# ---------------- Коллекционные карточки ----------------
+# Фишка удержания: коллекционирование + редкость. Карточки разблокируются
+# за игру, их можно открыть за монеты, а редкие — выпадать случайно.
+
+CARD_RARITY = [
+    ("common",  "Обычная",     "⚪", 62),
+    ("rare",    "Редкая",      "🔵", 26),
+    ("epic",    "Эпическая",   "🟣",  9),
+    ("legend",  "Легендарная", "🟡",  3),
+]
+RARITY_WEIGHT = {k: w for k, _n, _i, w in CARD_RARITY}
+RARITY_INFO = {k: {"name": n, "icon": i} for k, n, i, _w in CARD_RARITY}
+
+CARD_BANK = [
+    ("ok_2341",   "common", "Он написал «ок» в 23:41",              "Там, где «всё хорошо» не пишут в такое время"),
+    ("one_word",  "common", "Ответ в одно слово",                   "«Да» — это ответ и отказ одновременно"),
+    ("typo",      "common", "Опечатка в «не пропадай»",             "Он печатал на ходу и торопился к тебе"),
+    ("emoji_only","common", "Сообщение из трёх эмодзи",              "Текста нет — значит, слова не нужны"),
+    ("read_4h",   "common", "Ответ через 4 часа",                   "Онлайн, но не в приоритете"),
+    ("how_are_you","common", "«Как ты?» — «нормально»",             "Утром это правда. В час ночи — нет"),
+    ("sorry_later","common", "«Извини, что поздно»",                "Он не планировал писать сегодня"),
+    ("voice_long","common", "Голосовое на 4 минуты",                "Ответ голосовым = диалог, а не спор"),
+    ("no_answer", "common", "Прочитал и не ответил",                "Ответит позже. Или не ответит"),
+    ("meme",      "common", "Мем без подписи",                      "Подпись была бы важнее мема"),
+    ("laugh_only","common", "Только «хаха» в ответ",                "Смеялся над чем-то. Не над тобой"),
+    ("dont_know", "common", "«Не знаю, что ответить»",              "Вопрос был неудобный"),
+    ("morning_tx", "common", "Сообщение в 8:03 без «доброе утро»",   "Утро начинается с него"),
+    ("photo_self","common", "Фото себя без подписи",                "«Посмотри на меня»"),
+    ("voice_note","common", "Голосовое на 12 секунд",               "Думал, что напишет, но не стал печатать"),
+    ("see_later", "common", "«Посмотри потом»",                      "Потом — это никогда"),
+    ("double_ok", "common", "Два «ок» подряд",                      "Первое — неловкость, второе — ответ"),
+    ("sorry_busy","common", "«Я занят» без причины",                "Причина неудобная"),
+    ("music",     "common", "Песня без комментария",                "Песня = сообщение"),
+    ("weather",   "common", "«Тут дождь»",                          "Погода вместо «мне скучно»"),
+    ("aaa_rare",  "rare",   "«Позвони, если что»",                  "Фраза-отказ и фраза-приглашение одновременно"),
+    ("long_gap",  "rare",   "Час тишины, потом «как ты?»",           "Тайминг всё говорит"),
+    ("hedge",     "rare",   "«Может, лучше без меня?»",              "Вопрос «может» — это просьба"),
+    ("half_yes",  "rare",   "«Ну да, наверное»",                     "То есть нет"),
+    ("third_party","rare",   "«Мне Маша сказала, что вы расстались»", "Он знает, но проверяет, знаешь ли ты"),
+    ("photo_no_you","rare", "Фото с вечеринки, тебя нет в кадре",    "«А где ты?»"),
+    ("apology",   "rare",   "«Не переживай»",                        "Слова утешения = тревога"),
+    ("double_text","rare",  "Два сообщения подряд: «слушай» + «ладно»","Зачем отменять начатое"),
+    ("night_3am", "rare",   "Сообщение в 3 часа ночи",                "Ночь — время честных ответов"),
+    ("reminder",  "rare",   "«А помнишь, ты тогда сказала…»",        "Он помнит больше, чем ты"),
+    ("call_plan", "rare",   "«Позвони, когда сможешь»",              "Не «позвони», а «когда сможешь»"),
+    ("neutral_t","epic",    "«На нейтральной территории»",           "Зона комфорта, не ваша"),
+    ("past_future","epic",  "«В следующем году хочу, чтобы всё было иначе»","«Иначе» = не как сейчас"),
+    ("if_single", "epic",   "«Если будешь одна — я приду»",          "«Если» вместо «когда»"),
+    ("gift_doubt","epic",   "«У меня подарок, но не знаю, дарить ли»","Интрига — тоже подарок"),
+    ("silence_call","epic", "Звонит и молчит 5 секунд",              "Молчание в трубке — тоже подтекст"),
+    ("plans_jan", "epic",   "«С 1 января у меня другие планы»",      "Планы без деталей"),
+    ("year_q",    "epic",   "«У нас первый Новый год вместе?»",      "Вопрос «у нас» — это тест"),
+    ("photo_food","epic",   "Фото ужина в 2 часа ночи",              "Одиночество с едой"),
+    ("secret_kept","epic",  "«Только тебе скажу»",                   "И никогда не сказал"),
+    ("old_photo", "legend", "Фото с вашей первой встречи",           "Показывает, что помнит"),
+    ("one_word_love","legend","Сообщение из одного слова «наша»",    "Достаточно"),
+    ("proposal_soft","legend","«Я тут думаю… насчёт нас…»",        "Тянут самую сложную фразу"),
+    ("voice_sincerely","legend","Голосовое, где он говорит твоё имя","Просто иначе"),
+    ("silent_late","legend", "Сообщение в 4 утра без единого слова",  "Самое сложное сообщение"),
+    ("forgive_me","legend", "«Прости. Я знаю, что опоздал»",         "Прозвучало один раз в жизни"),
+    ("kept_promise","legend","Он выполнил то, что обещал полгода назад","Редкость не в подарке, а в памяти"),
+]
+CARD_BY_ID = {c[0]: c for c in CARD_BANK}
+CARD_OPEN_COST = 30
+
+def _pick_rarity():
+    """Взвешенный выбор редкости: обычных много, легендарных почти нет."""
+    total = sum(RARITY_WEIGHT.values())
+    x = random.random() * total
+    acc = 0
+    for k, _n, _i, w in CARD_RARITY:
+        acc += w
+        if x <= acc:
+            return k
+    return "common"
+
+def _pick_card(rarity):
+    pool = [c for c in CARD_BANK if c[1] == rarity]
+    return random.choice(pool) if pool else random.choice(CARD_BANK)
+
+def cards_view(acc):
+    """Состояние коллекции для вкладки «Коллекция»."""
+    raw = acc.get("cards") or {}
+    counts = {}
+    items = []
+    total = 0
+    for cid, n in raw.items():
+        c = CARD_BY_ID.get(cid)
+        if not c:
+            continue
+        total += int(n)
+        counts[c[1]] = counts.get(c[1], 0) + int(n)
+        items.append({"id": cid, "text": c[2], "sub": c[3], "rarity": c[1],
+                      "rarity_name": RARITY_INFO[c[1]]["name"],
+                      "rarity_icon": RARITY_INFO[c[1]]["icon"], "count": int(n)})
+    items.sort(key=lambda x: (["common", "rare", "epic", "legend"].index(x["rarity"]), x["id"]))
+    return {"ok": True, "total": total, "counts": counts, "items": items,
+            "opened": acc.get("cards_opened", 0),
+            "cost": CARD_OPEN_COST,
+            "rarities": [{"key": k, "name": n, "icon": i, "weight": w}
+                         for k, n, i, w in CARD_RARITY]}
+
+# ---------------- Недельный турнир ----------------
+# Очки суммируются из квиза и match-3 за текущую неделю (пн-вс по МСК).
+
+def tourney_week():
+    """Ключ недели: ISO-номер недели + год."""
+    return time.strftime("%G-W%V", time.gmtime(time.time() + DAY_TZ_OFFSET * 3600))
+
+def tourney_add(d, acc, points):
+    """Начислить очки в турнире В ТОМ ЖЕ dict d, который уже в памяти.
+
+    Важно: нельзя перечитывать store с диска — вызывающий код ещё не
+    сохранил изменения монет/уровня, и save_store изнутри затёр бы их.
+    """
+    if points <= 0:
+        return
+    t = acc.setdefault("tourney", {"score": 0, "week": ""})
+    week = tourney_week()
+    if t.get("week") != week:
+        t["week"] = week
+        t["score"] = 0
+    t["score"] = int(t.get("score", 0)) + int(points)
+
+async def api_cards(request):
+    """Коллекция карточек: состояние и открытие новой за монеты."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+
+    d = load_store(); acc = acc_of(d, uid)
+    action = body.get("action", "state")
+
+    if action == "exchange":
+        # 3 одинаковые карты -> 15 монет. Синька: дублики не мусор, а ресурс.
+        cid = str(body.get("card_id", ""))
+        need = 3
+        give = 15
+        raw = acc.setdefault("cards", {})
+        have = int(raw.get(cid, 0))
+        if have < need:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not_enough_cards",
+                                      "have": have, "need": need})
+        raw[cid] = have - need
+        acc["coins"] += give
+        save_store(d)
+        return web.json_response({"ok": True, "coins": acc["coins"], "got": give,
+                                  "state": cards_view(acc)})
+
+    if action == "open":
+        cost = int(body.get("cost") or CARD_OPEN_COST)
+        cost = max(1, min(cost, CARD_OPEN_COST))   # клиент не может занизить цену
+        if acc["coins"] < cost:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not_enough_coins",
+                                      "coins": acc["coins"], "cost": cost})
+        acc["coins"] -= cost
+        rarity = _pick_rarity()
+        card = _pick_card(rarity)
+        cid = card[0]
+        acc.setdefault("cards", {})
+        acc["cards"][cid] = acc["cards"].get(cid, 0) + 1
+        acc["cards_opened"] = acc.get("cards_opened", 0) + 1
+        save_store(d)
+        is_new = acc["cards"][cid] == 1
+        return web.json_response({
+            "ok": True, "is_new": is_new, "coins": acc["coins"],
+            "card": {"id": cid, "text": card[2], "sub": card[3], "rarity": card[1],
+                     "rarity_name": RARITY_INFO[card[1]]["name"],
+                     "rarity_icon": RARITY_INFO[card[1]]["icon"]},
+            "state": cards_view(acc)})
+
+    save_store(d)
+    return web.json_response(cards_view(acc))
+
+async def api_tourney(request):
+    """Таблица турнира: топ игроков недели и место текущего."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+
+    d = load_store()
+    week = tourney_week()
+    rows = []
+    for k, acc in d.items():
+        t = acc.get("tourney") or {}
+        if t.get("week") != week:
+            continue
+        sc = int(t.get("score", 0))
+        if sc <= 0:
+            continue
+        rows.append({"uid": k, "name": acc.get("name") or acc.get("first_name") or "Игрок",
+                     "score": sc})
+    rows.sort(key=lambda r: -r["score"])
+    top = [{"place": i + 1, "name": r["name"], "score": r["score"]}
+           for i, r in enumerate(rows[:10])]
+
+    my_score = 0
+    my_place = 0
+    acc = acc_of(d, uid)
+    t = acc.get("tourney") or {}
+    if t.get("week") == week:
+        my_score = int(t.get("score", 0))
+    for i, r in enumerate(rows):
+        if r["uid"] == str(uid):
+            my_place = i + 1
+            break
+    if not my_place and my_score > 0:
+        my_place = len(rows) + 1
+
+    return web.json_response({"ok": True, "week": week, "top": top,
+                              "my_score": my_score, "my_place": my_place,
+                              "players": len(rows)})
+
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
 async def api_admin_credit(request):
@@ -1264,6 +1499,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/leaderboard", api_leaderboard)
     app.router.add_post("/api/share/score", api_share_score)
     app.router.add_post("/api/channel/sub", api_channel_sub)
+    app.router.add_post("/api/cards", api_cards)
+    app.router.add_post("/api/tourney", api_tourney)
 
     @web.middleware
     async def cors_mw(request, handler):
