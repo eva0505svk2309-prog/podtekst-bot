@@ -1473,12 +1473,23 @@ CONTEST_PRIZE_STARS_EQUIV = 100      # номинал приза в звёзда
 # Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
 CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
 
+def _msk():
+    """Текущее время по Москве (aware)."""
+    return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
+
+def _contest_dt(s):
+    """Разбор даты конкурса. Всегда aware (МСК), иначе нельзя сравнивать."""
+    dt = datetime.datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=3)))
+    return dt
+
 def contest_state():
     """Текущее состояние конкурса: идёт / закончился / ещё не начался."""
-    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
-    if now < datetime.datetime.fromisoformat(CONTEST_START):
+    now = _msk()
+    if now < _contest_dt(CONTEST_START):
         return "upcoming"
-    if now > datetime.datetime.fromisoformat(CONTEST_END):
+    if now > _contest_dt(CONTEST_END):
         return "ended"
     return "running"
 
