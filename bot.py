@@ -1677,12 +1677,24 @@ async def send_prize_gift(user_id: int) -> str:
     for g in gl:
         em = (g.sticker.emoji if g.sticker else "") or ""
         by_emoji.setdefault(em, g)
+    # Порядок предпочтения: сначала самый щедрый, но не дороже того,
+    # что бот реально может оплатить со своего Stars-баланса.
+    try:
+        bal = (await bot.get_my_star_balance()).amount
+    except Exception:
+        bal = 0
+    prefs = [by_emoji[em] for em in [CONTEST_PRIZE_GIFT_EMOJI] + CONTEST_PRIZE_GIFT_FALLBACK
+             if em in by_emoji]
     chosen = None
-    for em in [CONTEST_PRIZE_GIFT_EMOJI] + CONTEST_PRIZE_GIFT_FALLBACK:
-        if em in by_emoji:
-            chosen = by_emoji[em]; break
+    for g in prefs:
+        if int(g.star_count or 0) <= bal:
+            chosen = g; break
     if chosen is None:
-        chosen = gl[0]
+        affordable = [g for g in gl if int(g.star_count or 0) <= bal]
+        if not affordable:
+            return (f"не хватило Stars на балансе бота ({bal} ⭐) для подарка. "
+                    "Нужно пополнить баланс бота или выдать приз вручную.")
+        chosen = min(affordable, key=lambda g: int(g.star_count or 0))
     try:
         await bot.send_gift(user_id=user_id, gift_id=chosen.id)
         em = (chosen.sticker.emoji if chosen.sticker else "?")
