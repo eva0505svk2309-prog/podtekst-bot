@@ -69,7 +69,8 @@ PACKS = {
     "noads":     (350, "Без рекламы"),
     "contest_entry": (100, "5 билетов в розыгрыш"),
 }
-ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads"}
+ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads",
+          "buy:contest_entry": "contest_entry"}
 
 def apply_referral(user_id, payload):
     """Один раз за приглашённого: 50 монет пригласившему и 20 новому."""
@@ -111,6 +112,9 @@ async def start(message: types.Message):
         return
     if payload == "buy:noads":
         await send_invoice(message.chat.id, "noads")
+        return
+    if payload == "buy:contest_entry":
+        await send_invoice(message.chat.id, "contest_entry")
         return
     if payload == "ref":
         await referral(message)
@@ -1791,6 +1795,7 @@ COMMANDS = [
     types.BotCommand(command="buy", description="Купить монеты за Stars"),
     types.BotCommand(command="stars", description="Цены на монеты и бонусы"),
     types.BotCommand(command="referral", description="Ссылка для друзей"),
+    types.BotCommand(command="contest", description="Призовой конкурс"),
     types.BotCommand(command="help", description="Список команд"),
     types.BotCommand(command="paysupport", description="Помощь с оплатой"),
 ]
