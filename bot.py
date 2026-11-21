@@ -461,6 +461,37 @@ def user_from_init(parts):
     except Exception:
         return None
 
+def track_source(parts):
+    """Источник перехода: метка рекламного канала из start_param (ch_xxx) или promo."""
+    src = ""
+    try:
+        raw = str(parts.get("start_param") or "")
+    except Exception:
+        raw = ""
+    if raw:
+        if raw.startswith("ch_"):
+            src = raw
+        else:
+            src = raw[:24]
+    return src or "direct"
+
+
+def track_visit_source(d, uid, src):
+    """Пишем источник визита: сколько игроков пришло с каждой рекламной площадки."""
+    try:
+        acc = acc_of(d, uid)
+        seen = acc.setdefault("src_seen", [])
+        if src and src not in seen and len(seen) < 12:
+            seen.append(src)
+        acc["src"] = src or acc.get("src", "")
+        p = d.setdefault("_promo", {"clicks": 0, "claims": 0, "by_source": {}})
+        bs = p.setdefault("by_source", {})
+        bs[src] = int(bs.get(src, 0)) + 1
+        p["visits_by_source"] = p.get("visits_by_source", {})
+        p["visits_by_source"][src] = int(p["visits_by_source"].get(src, 0)) + 1
+    except Exception:
+        pass
+
 def acc_of(d, uid):
     acc = d.setdefault(str(uid), {"coins": 0, "lives": 5, "noads": False,
                                   "streak": 0, "best": 0, "level": 1, "charges": []})
@@ -1094,6 +1125,29 @@ async def api_mira_hint(request):
                               "reward": PROMO_REWARD, "claimed": bool(promo.get("claimed"))})
 
 
+async def api_ads_stats(request):
+    """Сколько игроков пришло с каждой рекламной площадки (start_param ch_*)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    uid = user_from_init(parts) if parts else None
+    d = load_store()
+    p = d.get("_promo", {}) or {}
+    visits = p.get("visits_by_source", {}) or {}
+    players = {}
+    for u, acc in d.items():
+        if not isinstance(acc, dict) or u.startswith("_"):
+            continue
+        s = str(acc.get("src") or "")
+        if s:
+            players[s] = players.get(s, 0) + 1
+    return web.json_response({"ok": True, "visits_by_source": visits,
+                              "players_by_source": players,
+                              "total_players": len(players),
+                              "uid": str(uid) if uid else None})
+
 async def api_promo_stats(request):
     """Статистика по рекламным местам — какое место приносит больше кликов."""
     try:
@@ -1110,7 +1164,8 @@ async def api_promo_stats(request):
     p = d.get("_promo", {}) or {}
     return web.json_response({"ok": True, "clicks": int(p.get("clicks", 0)),
                               "claims": int(p.get("claims", 0)),
-                              "by_source": p.get("by_source", {}) or {}})
+                              "by_source": p.get("by_source", {}) or {},
+                              "visits_by_source": p.get("visits_by_source", {}) or {}})
 
 
 def _lb_rows(d, limit=20):
@@ -1273,6 +1328,10 @@ async def api_visit(request):
     except Exception:
         pass
     regen_lives(acc)
+    try:
+        track_visit_source(d, uid, track_source(parts))
+    except Exception:
+        pass
     is_new, reward, streak, penalty = register_visit(acc)
     if is_new:
         contest_add_points(d, acc, "day", 20)
@@ -1854,6 +1913,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/claim", api_promo_claim)
     app.router.add_post("/api/mira/hint", api_mira_hint)
     app.router.add_post("/api/promo/stats", api_promo_stats)
+    app.router.add_post("/api/ads/stats", api_ads_stats)
     app.router.add_post("/api/leaderboard", api_leaderboard)
     app.router.add_post("/api/share/score", api_share_score)
     app.router.add_post("/api/channel/sub", api_channel_sub)
