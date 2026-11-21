@@ -241,17 +241,91 @@ async def pre_checkout(q: PreCheckoutQuery):
 
 STORE = os.environ.get("STORE_PATH", "/data/store.json")
 
-def load_store():
+# ---------------- Хранилище состояния ----------------
+# Раньше каждый API-запрос писал весь JSON на диск: при наплыве аудитории
+# это давало полную перезапись состояния на каждый запрос и риск потери
+# данных при гонках между хендлерами.
+# Теперь состояние живёт в памяти (один объект на процесс), а на диск
+# пишется асинхронно с объединением записей: запросы быстрые, данные не теряются.
+_STORE_CACHE = None
+_STORE_DIRTY = False
+_STORE_FLUSH_TASK = None
+_STORE_FLUSH_DELAY = 0.25
+
+
+def _store_dir():
     try:
-        return json.load(open(STORE, encoding="utf-8"))
+        os.makedirs(os.path.dirname(STORE) or ".", exist_ok=True)
     except Exception:
-        return {}
+        pass
+
+
+def load_store():
+    """Вернуть общее состояние. Объект один на весь процесс, изменения
+    видны всем хендлерам сразу — гонок «прочитал-потерял-записал» нет."""
+    global _STORE_CACHE
+    if _STORE_CACHE is None:
+        try:
+            _store_dir()
+            with open(STORE, encoding="utf-8") as f:
+                _STORE_CACHE = json.load(f)
+        except Exception:
+            _STORE_CACHE = {}
+        if not isinstance(_STORE_CACHE, dict):
+            _STORE_CACHE = {}
+    return _STORE_CACHE
+
+
+def _flush_store_now():
+    global _STORE_DIRTY
+    if not _STORE_DIRTY:
+        return
+    d = _STORE_CACHE
+    if d is None:
+        return
+    _STORE_DIRTY = False
+    try:
+        _store_dir()
+        tmp = STORE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, STORE)
+    except Exception as e:
+        _STORE_DIRTY = True
+        logging.warning("store flush failed: %s", e)
+
+
+async def _flush_soon():
+    try:
+        await asyncio.sleep(_STORE_FLUSH_DELAY)
+        _flush_store_now()
+    except Exception:
+        pass
+
 
 def save_store(d):
-    tmp = STORE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, STORE)
+    """Отметить состояние изменённым и запланировать запись на диск."""
+    global _STORE_CACHE, _STORE_DIRTY, _STORE_FLUSH_TASK
+    _STORE_CACHE = d
+    _STORE_DIRTY = True
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if _STORE_FLUSH_TASK is None or _STORE_FLUSH_TASK.done():
+        _STORE_FLUSH_TASK = loop.create_task(_flush_soon())
+
+
+async def store_flusher():
+    """Периодически дописываем на диск на случай потери задач."""
+    while True:
+        try:
+            await asyncio.sleep(5)
+            _flush_store_now()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await asyncio.sleep(5)
 
 def grant(user_id, payload):
     d = load_store()
@@ -1936,6 +2010,8 @@ async def main():
     # Команды в меню бота выставляем при каждом старте: список должен
     # восстановиться сам, даже если Telegram его сбросил.
     await set_commands_once()
+    # Фоновая запись состояния на диск: не блокирует запросы.
+    _flusher = asyncio.create_task(store_flusher())
     mode = os.environ.get("MODE", "polling").lower()
     if mode == "webhook":
         port = int(os.environ.get("PORT", "8080"))
