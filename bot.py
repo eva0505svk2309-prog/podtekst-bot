@@ -1460,7 +1460,15 @@ CONTEST_TICKET_POINTS = 30               # очков активности на 
 CONTEST_TICKET_STARS = 100              # Stars за платный вход
 CONTEST_TICKETS_PAID = 5                # билетов за 100 Stars
 CONTEST_WINNERS = 3                      # сколько победителей
+# Приз: подарок Telegram + игровой пакет.
+# ПОДАРОК вместо 100 Stars: бот умеет отправлять подарки напрямую (sendGift),
+# в отличие от Stars, которые перевести пользователю бот НЕ может.
+# Подарок даёт ~100 звёзд номинала, виден в профиле, его можно улучшить
+# до NFT и переслать — воспринимаемая ценность выше, чем у звёзд.
 CONTEST_PRIZE = {"coins": 500, "lives": 3, "noads": True}
+CONTEST_PRIZE_GIFT_EMOJI = "💎"      # 100 звёзд номинала
+CONTEST_PRIZE_GIFT_FALLBACK = ["💎", "🏆", "💍", "🎂", "🚀"]  # запасные, если нет в каталоге
+CONTEST_PRIZE_STARS_EQUIV = 100      # номинал приза в звёздах (для текстов)
 
 # Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
 CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
@@ -1547,7 +1555,8 @@ async def api_contest(request):
         "winners": CONTEST_WINNERS,
         "prize_coins": CONTEST_PRIZE["coins"],
         "prize_lives": CONTEST_PRIZE["lives"],
-        "prize_stars": 100,
+        "prize_stars": CONTEST_PRIZE_STARS_EQUIV,
+        "prize_gift": CONTEST_PRIZE_GIFT_EMOJI,
         "ends_at": CONTEST_END,
         "top": top,
         "my_place": my_place,
@@ -1619,28 +1628,56 @@ async def giveprize(message: types.Message):
     acc["noads"] = True
     save_store(d)
 
+    gift_res = await send_prize_gift(target)
     msg = (f"\U0001F381 Поздравляем! Ты выиграл в конкурсе ПОДТЕКСТ.\n\n"
-           f"Приз: +{CONTEST_PRIZE['coins']} 🪙, +{CONTEST_PRIZE['lives']} 💗 жизни, "
-           "без рекламы навсегда.\n"
-           "100 Stars — в нативном розыгрыше в канале.")
+           f"Твой подарок: {gift_res}\n"
+           f"Плюс в игре: +{CONTEST_PRIZE['coins']} 🪙, +{CONTEST_PRIZE['lives']} 💗 жизни, "
+           "без рекламы навсегда.\n\n"
+           "Подарок уже в твоём профиле — его можно улучшить до NFT и переслать друзьям.")
     try:
         await bot.send_message(target, msg)
         sent = "Сообщение о призе отправлено."
     except Exception as e:
         sent = f"Не удалось отправить сообщение: {e}"
 
-    gift_note = ""
-    if len(parts) > 2 and parts[2] == "stars":
-        try:
-            gifts = await bot.get_available_gifts()
-            gl = gifts.gifts if gifts else []
-            if gl:
-                g0 = gl[0]
-                await bot.send_gift(user_id=target, gift_id=g0.id, pay_for_upgrade=True)
-                gift_note = f" Подарочек отправлен ({g0.id})."
-        except Exception as e:
-            gift_note = f" Подарок не отправлен: {e}"
-    await message.answer(f"Приз вручён игроку {target}. {sent}{gift_note}")
+    await message.answer(f"Приз вручён игроку {target}.\n"
+                         f"Подарок: {gift_res}\n{sent}")
+
+async def send_prize_gift(user_id: int) -> str:
+    """Отправить подарок-победителю. Возвращает описание результата.
+
+    Бот покупает подарок со своего Stars-баланса (он пополняется входящими
+    платежами за билеты, поэтому конкурс самоокупается). Если нужного подарка
+    нет в каталоге — берём следующий по списку. Если баланса не хватает —
+    честно сообщаем, приз выдаётся отдельно.
+    """
+    try:
+        gifts = await bot.get_available_gifts()
+    except Exception as e:
+        return f"не удалось получить каталог подарков: {e}"
+    gl = list(gifts.gifts) if gifts else []
+    if not gl:
+        return "каталог подарков пуст"
+    by_emoji = {}
+    for g in gl:
+        em = (g.sticker.emoji if g.sticker else "") or ""
+        by_emoji.setdefault(em, g)
+    chosen = None
+    for em in [CONTEST_PRIZE_GIFT_EMOJI] + CONTEST_PRIZE_GIFT_FALLBACK:
+        if em in by_emoji:
+            chosen = by_emoji[em]; break
+    if chosen is None:
+        chosen = gl[0]
+    try:
+        await bot.send_gift(user_id=user_id, gift_id=chosen.id)
+        em = (chosen.sticker.emoji if chosen.sticker else "?")
+        return f"подарок {em} отправлен (номинал {chosen.star_count} ⭐)"
+    except Exception as e:
+        msg = str(e)
+        if "not enough" in msg.lower() or "stars" in msg.lower():
+            return (f"не хватило Stars на балансе бота для подарка ({msg}). "
+                    "Нужно пополнить баланс бота или выдать приз вручную.")
+        return f"ошибка отправки подарка: {msg}"
 
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
