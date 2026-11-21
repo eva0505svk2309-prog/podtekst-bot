@@ -59,12 +59,15 @@ def kb():
         [InlineKeyboardButton(text="🤖 Mira — твой ИИ в Telegram", url=MIRA_URL)],
     ])
 
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
+
 PACKS = {
     "test_1star": (1, "Тест 1 звезда"),
     "coins_100": (100, "100 монет"),
     "coins_500": (500, "500 монет"),
     "lives":     (200, "+1 жизнь"),
     "noads":     (350, "Без рекламы"),
+    "contest_entry": (100, "5 билетов в розыгрыш"),
 }
 ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads"}
 
@@ -85,6 +88,7 @@ def apply_referral(user_id, payload):
     a1 = acc_of(d, inviter); a2 = acc_of(d, user_id)
     a1["coins"] += 50
     a1["invited"] = a1.get("invited", 0) + 1
+    contest_add_points(d, a1, "ref", 25)
     a2["coins"] += 20
     # Milestone: every 3 friends -> +100 coins to the inviter
     milestone = a1["invited"] % 3 == 0
@@ -254,6 +258,10 @@ def grant(user_id, payload):
     elif payload == "coins_500": acc["coins"] += 500
     elif payload == "lives": acc["lives"] += 1
     elif payload == "noads": acc["noads"] = True
+    elif payload == "contest_entry":
+        c = contest_tickets(acc_of(d, user_id))
+        c["tickets"] = int(c.get("tickets", 0)) + CONTEST_TICKETS_PAID
+        c["paid_tickets"] = int(c.get("paid_tickets", 0)) + CONTEST_TICKETS_PAID
     save_store(d)
     return acc
 
@@ -705,6 +713,7 @@ async def api_answer(request):
         acc["coins"] += 10
         acc["streak"] += 1
         tourney_add(d, acc, 10)
+        contest_add_points(d, acc, "quiz", 10)
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
         if not chal.get("done"):
             chal["done"] = 1
@@ -844,6 +853,7 @@ async def api_m3(request):
             m["total"] = int(m.get("total", 0)) + score
             m["best"] = max(int(m.get("best", 0)), score)
             tourney_add(d, acc, max(0, score) // 10)
+            contest_add_points(d, acc, "m3", 5)
             m["lvl"] = cur + 1
             m["score"] = 0
             m["moves"] = M3_MAX_MOVES
@@ -1143,6 +1153,7 @@ async def api_share_score(request):
         days = int(acc.get("day_streak", 0) or 0)
     except Exception:
         streak = days = 0
+    contest_add_points(d, acc, "share", 15)
     d.setdefault("_shares", [])
     shares = d["_shares"]
     shares.append({"uid": str(uid), "streak": streak, "days": days,
@@ -1185,6 +1196,8 @@ async def api_visit(request):
         pass
     regen_lives(acc)
     is_new, reward, streak, penalty = register_visit(acc)
+    if is_new:
+        contest_add_points(d, acc, "day", 20)
     save_store(d)
     return web.json_response({"ok": True, "new_day": is_new, "reward": reward,
                               "streak": streak, "penalty": penalty,
@@ -1422,6 +1435,213 @@ async def api_tourney(request):
                               "my_score": my_score, "my_place": my_place,
                               "players": len(rows)})
 
+# ============================================================
+# ПРИЗОВОЙ КОНКУРС «ПОДТЕКСТ» — бесплатный вход + платный вход
+# ============================================================
+# Идея: игрок копит очки активности (квиз, match-3, серия дней,
+# рефералка) и обменивает их на БИЛЕТЫ в розыгрыш.
+#
+# Вход БЕСПЛАТНЫЙ: 30 очков активности = 1 билет.
+# Вход ПЛАТНЫЙ:  100 Stars = 5 билетов (это же отбивает расход
+#                на рекламу и реально мотивирует: «вложился — жди
+#                шанс выиграть крупнее»).
+#
+# ПРИЗ: 100 Stars победителю + игровые бонусы.
+# Техническое ограничение Telegram: бот НЕ может перевести Stars
+# пользователю (в Bot API нет такого метода — только refundStarPayment
+# для возврата его собственной оплаты). Поэтому Stars-приз разыгрывается
+# НАТИВНЫМ розыгрышем в канале (создаётся в Telegram, не ботом),
+# а бот начисляет внутриигровой пакет: монеты + жизни + без рекламы.
+
+CONTEST_ID = "podtekst_v1"
+CONTEST_END = "2026-12-15T23:59:00"      # окончание приёма билетов (МСК)
+CONTEST_START = "2026-11-21T00:00:00"
+CONTEST_TICKET_POINTS = 30               # очков активности на 1 бесплатный билет
+CONTEST_TICKET_STARS = 100              # Stars за платный вход
+CONTEST_TICKETS_PAID = 5                # билетов за 100 Stars
+CONTEST_WINNERS = 3                      # сколько победителей
+CONTEST_PRIZE = {"coins": 500, "lives": 3, "noads": True}
+
+# Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
+CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
+
+def contest_state():
+    """Текущее состояние конкурса: идёт / закончился / ещё не начался."""
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
+    if now < datetime.datetime.fromisoformat(CONTEST_START):
+        return "upcoming"
+    if now > datetime.datetime.fromisoformat(CONTEST_END):
+        return "ended"
+    return "running"
+
+def contest_tickets(acc):
+    """Сколько билетов уже есть у игрока (купленных за Stars)."""
+    c = acc.setdefault("contest", {"points": 0, "paid_tickets": 0, "tickets": 0})
+    c.setdefault("points", 0)
+    c.setdefault("paid_tickets", 0)
+    c.setdefault("tickets", 0)
+    return c
+
+def contest_add_points(d, acc, kind, amount=None):
+    """Начислить очки активности за действие (квиз/match-3/день/рефералка)."""
+    if contest_state() != "running":
+        return 0
+    pts = amount if amount is not None else CONTEST_ACTION_POINTS.get(kind, 0)
+    if pts <= 0:
+        return 0
+    c = contest_tickets(acc)
+    c["points"] = int(c.get("points", 0)) + int(pts)
+    # Каждые 30 очков автоматически превращаются в бесплатный билет
+    gained = c["points"] // CONTEST_TICKET_POINTS
+    if gained:
+        c["points"] -= gained * CONTEST_TICKET_POINTS
+        c["tickets"] = int(c.get("tickets", 0)) + gained
+    return pts
+
+async def api_contest(request):
+    """Состояние конкурса: очки, билеты, место в рейтинге, лидеры."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+
+    d = load_store(); acc = acc_of(d, uid)
+    c = contest_tickets(acc)
+    save_store(d)
+
+    # Рейтинг участников по билетам
+    rows = []
+    for k, a in d.items():
+        if not k.isdigit():
+            continue
+        cc = a.get("contest") or {}
+        t = int(cc.get("tickets", 0))
+        if t <= 0:
+            continue
+        rows.append({"uid": k, "name": a.get("name") or a.get("first_name") or "Игрок",
+                     "tickets": t})
+    rows.sort(key=lambda r: (-r["tickets"], r["name"]))
+    top = [{"place": i + 1, "name": r["name"], "tickets": r["tickets"]}
+           for i, r in enumerate(rows[:10])]
+    my_place = 0
+    for i, r in enumerate(rows):
+        if r["uid"] == str(uid):
+            my_place = i + 1
+            break
+
+    return web.json_response({
+        "ok": True,
+        "state": contest_state(),
+        "points": int(c.get("points", 0)),
+        "points_needed": CONTEST_TICKET_POINTS,
+        "tickets": int(c.get("tickets", 0)),
+        "paid_tickets": int(c.get("paid_tickets", 0)),
+        "paid_stars": CONTEST_TICKET_STARS,
+        "paid_tickets_amount": CONTEST_TICKETS_PAID,
+        "winners": CONTEST_WINNERS,
+        "prize_coins": CONTEST_PRIZE["coins"],
+        "prize_lives": CONTEST_PRIZE["lives"],
+        "prize_stars": 100,
+        "ends_at": CONTEST_END,
+        "top": top,
+        "my_place": my_place,
+        "players": len(rows),
+        **wallet_view(acc),
+    })
+
+async def api_contest_buy(request):
+    """Оплатить вход в розыгрыш: 100 Stars -> 5 билетов.
+
+    Платёж идёт обычным инвойсом Telegram (payload contest_entry).
+    Проверка платежа — в обработчике successful_payment.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    if contest_state() != "running":
+        return web.json_response({"ok": False, "error": "contest closed"})
+    d = load_store(); acc = acc_of(d, uid)
+    contest_tickets(acc); save_store(d)
+    return web.json_response({"ok": True, "stars": CONTEST_TICKET_STARS,
+                              "tickets": CONTEST_TICKETS_PAID,
+                              "method": "stars"})
+
+@dp.message(Command("contest"))
+async def contest_cmd(message: types.Message):
+    """Команда /contest: правила и статус розыгрыша."""
+    d = load_store(); acc = acc_of(d, message.from_user.id)
+    c = contest_tickets(acc)
+    await message.answer(
+        "\U0001F3C6 <b>Призовой конкурс ПОДТЕКСТ</b>\n\n"
+        "Приз: <b>100 Stars</b> + 500 монет + 3 жизни + без рекламы\n"
+        f"Победителей: {CONTEST_WINNERS}\n"
+        f"Дедлайн: {CONTEST_END[:10]}\n\n"
+        "<b>Бесплатный вход:</b> играй, копи очки активности — "
+        f"каждые {CONTEST_TICKET_POINTS} очков = 1 билет.\n"
+        "<b>Платный вход:</b> 100 Stars = 5 билетов.\n\n"
+        f"Твои очки: {c.get('points', 0)}/{CONTEST_TICKET_POINTS} · "
+        f"билетов: {c.get('tickets', 0)}\n\n"
+        "Играй тут:",
+        reply_markup=kb())
+
+@dp.message(Command("giveprize"))
+async def giveprize(message: types.Message):
+    """Админ: выдать игровой пакет prize победителю конкурса.
+
+    /giveprize <user_id> — вручить игровой пакет (500 монет, 3 жизни, без рекламы).
+    /giveprize <user_id> stars — дополнительно отправить подарок (если хватает Stars).
+    """
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Нет доступа."); return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("Формат: /giveprize <user_id> [stars]"); return
+    try:
+        target = int(parts[1])
+    except ValueError:
+        await message.answer("user_id должен быть числом."); return
+    d = load_store(); acc = acc_of(d, target)
+    acc["coins"] += CONTEST_PRIZE["coins"]
+    acc["lives"] = min(9, int(acc.get("lives", 5)) + CONTEST_PRIZE["lives"])
+    acc["noads"] = True
+    save_store(d)
+
+    msg = (f"\U0001F381 Поздравляем! Ты выиграл в конкурсе ПОДТЕКСТ.\n\n"
+           f"Приз: +{CONTEST_PRIZE['coins']} 🪙, +{CONTEST_PRIZE['lives']} 💗 жизни, "
+           "без рекламы навсегда.\n"
+           "100 Stars — в нативном розыгрыше в канале.")
+    try:
+        await bot.send_message(target, msg)
+        sent = "Сообщение о призе отправлено."
+    except Exception as e:
+        sent = f"Не удалось отправить сообщение: {e}"
+
+    gift_note = ""
+    if len(parts) > 2 and parts[2] == "stars":
+        try:
+            gifts = await bot.get_available_gifts()
+            gl = gifts.gifts if gifts else []
+            if gl:
+                g0 = gl[0]
+                await bot.send_gift(user_id=target, gift_id=g0.id, pay_for_upgrade=True)
+                gift_note = f" Подарочек отправлен ({g0.id})."
+        except Exception as e:
+            gift_note = f" Подарок не отправлен: {e}"
+    await message.answer(f"Приз вручён игроку {target}. {sent}{gift_note}")
+
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
 async def api_admin_credit(request):
@@ -1501,6 +1721,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/channel/sub", api_channel_sub)
     app.router.add_post("/api/cards", api_cards)
     app.router.add_post("/api/tourney", api_tourney)
+    app.router.add_post("/api/contest", api_contest)
+    app.router.add_post("/api/contest/buy", api_contest_buy)
 
     @web.middleware
     async def cors_mw(request, handler):
