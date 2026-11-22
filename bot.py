@@ -63,7 +63,11 @@ def kb(src_code=""):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Играть", web_app=WebAppInfo(url=webapp_url(src_code)))],
         [InlineKeyboardButton(text="Челлендж дня", web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text="Канал", url=CHANNEL)],
+        # Подписка на канал — главный источник подписчиков. Кнопка ведёт прямо
+        # в канал, рядом кнопка проверки: бот сам проверяет подписку и платит.
+        [InlineKeyboardButton(text="📢 Подписаться на канал", url=CHANNEL)],
+        [InlineKeyboardButton(text=f"✓ Проверить подписку (+{SUB_REWARD} 🪙)",
+                              callback_data="check_sub")],
         [InlineKeyboardButton(text="🤖 Mira — твой ИИ в Telegram", url=MIRA_URL)],
     ])
 
@@ -153,6 +157,10 @@ async def start(message: types.Message):
         "<b>ПОДТЕКСТ</b>\n\nОн сказал «ок» — а что он имел в виду на самом деле?\n\n"
         "Квиз с подтекстом · Три в ряд · Челлендж дня у всех одинаковый.\n\n"
         "Играй — и не тормози.\n\n"
+        f"📢 <b>Подпишись на канал</b> — новые челленджи первыми и "
+        f"<b>+{SUB_REWARD} 🪙</b> на кошелёк.\n"
+        f"🎉 И играй в розыгрыш: 1 место — 100 ⭐, 2 — 50 ⭐, 3 — 25 ⭐. "
+        f"Каждые 30 очков активности = 1 билет, бесплатно. Финал — 15 декабря.\n\n"
         f"🤖 Нужен ИИ-помощник в Telegram? Забери Mira по ссылке и получи "
         f"<b>+{PROMO_REWARD} 🪙</b> в игре:\n{MIRA_URL}", reply_markup=kb(src_code))
 
@@ -169,30 +177,70 @@ async def referral(message: types.Message):
         f"Приглашено: {invited}. До бонуса +100 🪙 осталось {left}.\n"
         "Бонус начисляется один раз за друга, автоматически.")
 
-@dp.message(Command("subscribe"))
-async def subscribe_cmd(message: types.Message):
-    """Игрок жмёт кнопку — проверяем подписку на канал и платим разово."""
+async def _channel_sub_check(user_id: int):
+    """Проверяет подписку на канал и начисляет бонус один раз.
+
+    Возвращает (status, reward): status in ok|not_sub|already|no_channel.
+    """
     if not CHAT_ID:
-        await message.answer("Канал пока не настроен."); return
+        return "no_channel", 0
     try:
-        member = await bot.get_chat_member(CHAT_ID, message.from_user.id)
+        member = await bot.get_chat_member(CHAT_ID, user_id)
         st = getattr(member, "status", "")
-    except Exception:
-        st = ""
+    except Exception as e:
+        logging.info("get_chat_member: %s", e)
+        return "not_sub", 0
     if st not in ("member", "administrator", "creator", "restricted"):
-        await message.answer(f"Сначала подпишись на канал: {CHANNEL}\n\n"
-                             f"Потом нажми кнопку ещё раз — и получишь "
-                             f"<b>+{SUB_REWARD} 🪙</b>.")
-        return
-    d = load_store(); acc = acc_of(d, message.from_user.id)
+        return "not_sub", 0
+    d = load_store(); acc = acc_of(d, user_id)
     sub = acc.setdefault("channel_sub", {"claimed": False})
     if sub.get("claimed"):
-        await message.answer("Бонус за подписку уже получен 🙂"); return
+        return "already", 0
     acc["coins"] = int(acc.get("coins", 0) or 0) + SUB_REWARD
     sub["claimed"] = True; sub["ts"] = int(time.time())
     save_store(d)
-    await message.answer(f"🎉 Подписка засчитана! <b>+{SUB_REWARD} 🪙</b> начислено.",
-                         reply_markup=kb())
+    return "ok", SUB_REWARD
+
+
+@dp.callback_query(F.text.startswith("check_sub"))
+async def cb_check_sub(call: types.CallbackQuery):
+    """Кнопка «Проверить подписку» — проверяет и платит бонус."""
+    status, reward = await _channel_sub_check(call.from_user.id)
+    if status == "ok":
+        text = f"🎉 Подписка засчитана! <b>+{reward} 🪙</b> начислено."
+    elif status == "already":
+        text = "Бонус за подписку уже получен 🙂"
+    elif status == "no_channel":
+        text = "Канал пока не настроен."
+    else:
+        text = (f"Сначала подпишись на канал: {CHANNEL}\n\n"
+                f"Потом нажми «Проверить подписку» ещё раз — и получишь "
+                f"<b>+{SUB_REWARD} 🪙</b>.")
+    try:
+        await call.answer(text[:200], show_alert=False)
+    except Exception:
+        pass
+    try:
+        await call.message.answer(text, reply_markup=kb())
+    except Exception:
+        pass
+
+
+@dp.message(Command("subscribe"))
+async def subscribe_cmd(message: types.Message):
+    """Игрок жмёт кнопку — проверяем подписку на канал и платим разово."""
+    status, reward = await _channel_sub_check(message.from_user.id)
+    if status == "ok":
+        await message.answer(f"🎉 Подписка засчитана! <b>+{reward} 🪙</b> начислено.",
+                             reply_markup=kb())
+        return
+    if status == "already":
+        await message.answer("Бонус за подписку уже получен 🙂"); return
+    if status == "no_channel":
+        await message.answer("Канал пока не настроен."); return
+    await message.answer(f"Сначала подпишись на канал: {CHANNEL}\n\n"
+                         f"Потом нажми кнопку ещё раз — и получишь "
+                         f"<b>+{SUB_REWARD} 🪙</b>.")
 
 
 @dp.message(Command("mira"))
@@ -480,17 +528,25 @@ def user_from_init(parts):
     except Exception:
         return None
 
-def track_source(parts):
-    """Источник перехода: метка рекламного канала из start_param (ch_xxx) или promo."""
+def track_source(parts, body_source=""):
+    """Источник перехода: метка рекламного канала.
+
+    Порядок: start_param из initData -> source из тела запроса -> pending_src (сохранён
+    при входе в бота по /start ch_xxx). Без этой цепочки метка из рекламы терялась
+    и вся статистика показывала "direct".
+    """
     src = ""
     try:
         raw = str(parts.get("start_param") or "")
     except Exception:
         raw = ""
+    if not raw:
+        raw = str(body_source or "")
     if raw:
+        raw = raw.strip()
         if raw.startswith("ch_"):
-            src = raw
-        else:
+            src = raw[:40]
+        elif raw:
             src = raw[:24]
     return src or "direct"
 
@@ -1346,6 +1402,11 @@ async def api_visit(request):
     uid = user_from_init(parts)
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
+    body_source = ""
+    try:
+        body_source = str(body.get("source") or "")
+    except Exception:
+        body_source = ""
     d = load_store(); acc = acc_of(d, uid)
     try:
         u = json.loads(parts.get("user", "{}"))
@@ -1356,7 +1417,7 @@ async def api_visit(request):
         pass
     regen_lives(acc)
     try:
-        src = track_source(parts)
+        src = track_source(parts, body_source)
         if not src or src == "direct":
             src = str(acc.get("pending_src") or "") or src
         track_visit_source(d, uid, src)
@@ -2246,9 +2307,9 @@ async def daily_poster_loop():
             logging.warning("daily poster loop: %s", e)
             await asyncio.sleep(300)
 
-@dp.callback_query()
+@dp.callback_query(F.text.startswith("vote:"))
 async def on_vote(call: types.CallbackQuery):
-    """Голосование в ежедневном посте."""
+    """Голосование в ежедневном посте (только свои vote:*)."""
     if not call.data or not call.data.startswith("vote:"):
         return
     choice = call.data.split(":")[1]
