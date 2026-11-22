@@ -51,9 +51,17 @@ logging.getLogger("aiogram").setLevel(logging.WARNING)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp  = Dispatcher()
 
-def kb():
+def webapp_url(src_code=""):
+    """URL Mini App с меткой источника: Telegram отдаёт её в init_data как start_param."""
+    if not src_code:
+        return WEBAPP_URL
+    sep = "&" if "?" in WEBAPP_URL else "?"
+    return f"{WEBAPP_URL}{sep}startapp={src_code}"
+
+
+def kb(src_code=""):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Играть", web_app=WebAppInfo(url=WEBAPP_URL))],
+        [InlineKeyboardButton(text="Играть", web_app=WebAppInfo(url=webapp_url(src_code)))],
         [InlineKeyboardButton(text="Челлендж дня", web_app=WebAppInfo(url=WEBAPP_URL))],
         [InlineKeyboardButton(text="Канал", url=CHANNEL)],
         [InlineKeyboardButton(text="🤖 Mira — твой ИИ в Telegram", url=MIRA_URL)],
@@ -119,6 +127,17 @@ async def start(message: types.Message):
     if payload == "ref":
         await referral(message)
         return
+    # Рекламная метка канала (ch_xxx) прилетает сюда — запоминаем её,
+    # чтобы статистика по каналам считалась (init_data её не содержит).
+    src_code = ""
+    if payload.startswith("ch_"):
+        src_code = payload[:40]
+        try:
+            d = load_store(); acc = acc_of(d, message.from_user.id)
+            acc["pending_src"] = src_code
+            save_store(d)
+        except Exception as e:
+            logging.warning("pending_src save failed: %s", e)
     ref_result = apply_referral(message.from_user.id, payload)
     if ref_result:
         inviter, milestone = ref_result
@@ -135,7 +154,7 @@ async def start(message: types.Message):
         "Квиз с подтекстом · Три в ряд · Челлендж дня у всех одинаковый.\n\n"
         "Играй — и не тормози.\n\n"
         f"🤖 Нужен ИИ-помощник в Telegram? Забери Mira по ссылке и получи "
-        f"<b>+{PROMO_REWARD} 🪙</b> в игре:\n{MIRA_URL}", reply_markup=kb())
+        f"<b>+{PROMO_REWARD} 🪙</b> в игре:\n{MIRA_URL}", reply_markup=kb(src_code))
 
 @dp.message(Command("referral"))
 async def referral(message: types.Message):
@@ -1335,7 +1354,10 @@ async def api_visit(request):
         pass
     regen_lives(acc)
     try:
-        track_visit_source(d, uid, track_source(parts))
+        src = track_source(parts)
+        if not src or src == "direct":
+            src = str(acc.get("pending_src") or "") or src
+        track_visit_source(d, uid, src)
     except Exception:
         pass
     is_new, reward, streak, penalty = register_visit(acc)
