@@ -1543,6 +1543,8 @@ async def api_tourney(request):
     week = tourney_week()
     rows = []
     for k, acc in d.items():
+        if not k.isdigit() or not isinstance(acc, dict):
+            continue
         t = acc.get("tourney") or {}
         if t.get("week") != week:
             continue
