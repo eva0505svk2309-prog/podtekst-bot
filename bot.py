@@ -1303,7 +1303,7 @@ async def api_share_score(request):
            f"Серия в квизе: <b>{streak}</b> подряд · заходов: <b>{days}</b> дней\n\n"
            f"А сколько подтекстов разгадаешь ты?\n"
            f"Играть: <a href=\"https://t.me/{BOT_USERNAME}\">@podtekst_game_bot</a>\n\n"
-           f"🤖 Спроси Mira, если застрял: {MIRA_URL}")
+           f"❓ Сомневаешься в трактовке — кидай фразу в бота, разберём.")
     try:
         await bot.send_message(CHAT_ID, txt, parse_mode="HTML",
                                disable_web_page_preview=True)
@@ -2179,8 +2179,7 @@ async def publish_daily_post():
                   f"3\. {options[2]}\n\n"
                   f"\U0001F3AF Голосуйте, правильный ответ — в комментариях завтра.\n\n"
                   f"{teaser}\n\n"
-                  f"\U0001F3AE <a href=\"{CHANNEL}\">Канал</a> · "
-                  f"<a href=\"https://t.me/podtekst_game_bot\">Играть</a>"),
+                  f"\U0001F3AE <a href=\"https://t.me/podtekst_game_bot\">Играть: @podtekst_game_bot</a>"),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="1️⃣", callback_data="vote:1"),
