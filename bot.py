@@ -89,7 +89,7 @@ def apply_referral(user_id, payload):
     a1 = acc_of(d, inviter); a2 = acc_of(d, user_id)
     a1["coins"] += 50
     a1["invited"] = a1.get("invited", 0) + 1
-    contest_add_points(d, a1, "ref", 25)
+    contest_add_points(d, a1, "ref", 25); bp_add_points(d, a1, "ref")
     a2["coins"] += 20
     # Milestone: every 3 friends -> +100 coins to the inviter
     milestone = a1["invited"] % 3 == 0
@@ -511,6 +511,8 @@ def acc_of(d, uid):
     acc.setdefault("cards", {})        # rarity -> {card_id: count}
     acc.setdefault("cards_opened", 0)
     acc.setdefault("tourney", {"score": 0, "week": ""})
+    acc.setdefault("bp", {"coins": 0, "level": 1, "claimed": []})
+    acc.setdefault("bp_skin", "")
     return acc
 
 
@@ -802,8 +804,12 @@ async def api_answer(request):
     last = answered.get(str(idx))
     now_ts = int(time.time())
     if last and (now_ts - int(last)) < ANSWER_COOLDOWN:
-        return web.json_response({"ok": False, "error": "already answered",
-                                  **wallet_view(acc)})
+        # Повторный ответ на тот же вопрос — это НЕ поломка. Клиент раньше
+        # показывал «Ошибка проверки ответа», потому что любой error читался
+        # как сбой. Теперь отдаём явный флаг и правильный ответ.
+        return web.json_response({"ok": True, "already_answered": True,
+                                  "correct": chosen == q["c"], "answer": q["o"][q["c"]],
+                                  "hint": q["h"], **wallet_view(acc)})
     answered[str(idx)] = now_ts
     if len(answered) > 200:
         for k in sorted(answered, key=lambda x: answered[x])[:100]:
@@ -822,7 +828,7 @@ async def api_answer(request):
         acc["coins"] += 10
         acc["streak"] += 1
         tourney_add(d, acc, 10)
-        contest_add_points(d, acc, "quiz", 10)
+        contest_add_points(d, acc, "quiz", 10); bp_add_points(d, acc, "quiz")
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
         if not chal.get("done"):
             chal["done"] = 1
@@ -846,7 +852,7 @@ async def api_answer(request):
         acc["lives"] = max(1, acc["lives"] - 1)
     save_store(d)
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
-                              "hint": q["h"], **wallet_view(acc)})
+                              "hint": q["h"], **bp_state(acc), **wallet_view(acc)})
 
 
 # ---------------- Mini App API: прогресс match-3 + профиль ----------------
@@ -962,7 +968,7 @@ async def api_m3(request):
             m["total"] = int(m.get("total", 0)) + score
             m["best"] = max(int(m.get("best", 0)), score)
             tourney_add(d, acc, max(0, score) // 10)
-            contest_add_points(d, acc, "m3", 5)
+            contest_add_points(d, acc, "m3", 5); bp_add_points(d, acc, "m3")
             m["lvl"] = cur + 1
             m["score"] = 0
             m["moves"] = M3_MAX_MOVES
@@ -1286,7 +1292,7 @@ async def api_share_score(request):
         days = int(acc.get("day_streak", 0) or 0)
     except Exception:
         streak = days = 0
-    contest_add_points(d, acc, "share", 15)
+    contest_add_points(d, acc, "share", 15); bp_add_points(d, acc, "share")
     d.setdefault("_shares", [])
     shares = d["_shares"]
     shares.append({"uid": str(uid), "streak": streak, "days": days,
@@ -1334,7 +1340,7 @@ async def api_visit(request):
         pass
     is_new, reward, streak, penalty = register_visit(acc)
     if is_new:
-        contest_add_points(d, acc, "day", 20)
+        contest_add_points(d, acc, "day", 20); bp_add_points(d, acc, "day")
     save_store(d)
     return web.json_response({"ok": True, "new_day": is_new, "reward": reward,
                               "streak": streak, "penalty": penalty,
@@ -1543,8 +1549,6 @@ async def api_tourney(request):
     week = tourney_week()
     rows = []
     for k, acc in d.items():
-        if not k.isdigit() or not isinstance(acc, dict):
-            continue
         t = acc.get("tourney") or {}
         if t.get("week") != week:
             continue
@@ -1676,7 +1680,7 @@ async def api_contest(request):
     # Рейтинг участников по билетам
     rows = []
     for k, a in d.items():
-        if not k.isdigit():
+        if not k.isdigit() or not isinstance(a, dict):
             continue
         cc = a.get("contest") or {}
         t = int(cc.get("tickets", 0))
@@ -1841,6 +1845,157 @@ async def send_prize_gift(user_id: int) -> str:
                     "Нужно пополнить баланс бота или выдать приз вручную.")
         return f"ошибка отправки подарка: {msg}"
 
+# ---------------- Battle Pass (билет сезона) ----------------
+# Серверный прогресс: игрок копит очки активности, уровни открываются
+# автоматически, а награду нужно забрать вручную (одна кнопка).
+BP_LEVELS = [
+    {"coins": 0,     "name": "\u0421\u0442\u0430\u0440\u0442",              "reward": {}},
+    {"coins": 500,   "name": "+100 \U0001FA99",              "reward": {"coins": 100}},
+    {"coins": 1200,  "name": "+200 \U0001FA99",              "reward": {"coins": 200}},
+    {"coins": 2500,  "name": "+1 \U0001F497",                "reward": {"lives": 1}},
+    {"coins": 4500,  "name": "+300 \U0001FA99",              "reward": {"coins": 300}},
+    {"coins": 7000,  "name": "\U0001F308 \u0420\u0430\u0434\u0443\u0433\u0430", "reward": {"skin": "rainbow"}},
+    {"coins": 10000, "name": "+500 \U0001FA99",              "reward": {"coins": 500}},
+]
+BP_ACTION_POINTS = {"quiz": 30, "m3": 20, "day": 50, "ref": 60, "share": 40}
+
+def bp_acc(acc):
+    """Состояние билета сезона для игрока."""
+    bp = acc.setdefault("bp", {"coins": 0, "level": 1, "claimed": []})
+    bp.setdefault("coins", 0)
+    bp.setdefault("level", 1)
+    bp.setdefault("claimed", [])
+    return bp
+
+def bp_level_for(coins):
+    """Номер уровня по набранным очкам (1-based)."""
+    lv = 1
+    for i, l in enumerate(BP_LEVELS):
+        if coins >= l["coins"]:
+            lv = i + 1
+    return lv
+
+def bp_add_points(d, acc, kind, amount=None):
+    """Начислить очки сезона за действие. Возвращает новый уровень, если вырос."""
+    pts = amount if amount is not None else BP_ACTION_POINTS.get(kind, 0)
+    if pts <= 0:
+        return 0
+    bp = bp_acc(acc)
+    bp["coins"] = int(bp.get("coins", 0)) + int(pts)
+    old = int(bp.get("level", 1))
+    new = bp_level_for(int(bp["coins"]))
+    bp["level"] = new
+    return new if new > old else 0
+
+def bp_state(acc):
+    """Полное состояние билета для фронта."""
+    bp = bp_acc(acc)
+    coins = int(bp.get("coins", 0))
+    level = int(bp.get("level", 1))
+    claimed = set(bp.get("claimed", []))
+    levels = []
+    for i, l in enumerate(BP_LEVELS):
+        n = i + 1
+        levels.append({
+            "level": n, "coins": l["coins"], "name": l["name"],
+            "reward": l.get("reward", {}),
+            "unlocked": coins >= l["coins"],
+            "claimed": n in claimed,
+            "claimable": (coins >= l["coins"] and n > 1 and n not in claimed),
+        })
+    nxt = BP_LEVELS[level] if level < len(BP_LEVELS) else None
+    return {
+        "ok": True, "coins": coins, "level": level,
+        "max_level": len(BP_LEVELS),
+        "next_coins": nxt["coins"] if nxt else coins,
+        "next_name": nxt["name"] if nxt else "\u041c\u0430\u043a\u0441\u0438\u043c\u0443\u043c",
+        "to_next": max(0, (nxt["coins"] if nxt else coins) - coins),
+        "levels": levels,
+        "claimed": sorted(claimed),
+        "skin": acc.get("bp_skin", ""),
+    }
+
+def bp_apply_reward(acc, reward):
+    """Применить награду уровня к кошельку игрока."""
+    got = []
+    if reward.get("coins"):
+        acc["coins"] = int(acc.get("coins", 0)) + int(reward["coins"])
+        got.append(f"+{reward['coins']} \U0001FA99")
+    if reward.get("lives"):
+        acc["lives"] = min(9, int(acc.get("lives", 5)) + int(reward["lives"]))
+        got.append(f"+{reward['lives']} \U0001F497")
+    if reward.get("skin"):
+        acc["bp_skin"] = reward["skin"]
+        got.append("\U0001F308 \u0441\u043a\u0438\u043d")
+    if reward.get("noads"):
+        acc["noads"] = True
+        got.append("\u0431\u0435\u0437 \u0440\u0435\u043a\u043b\u0430\u043c\u044b")
+    return got
+
+async def api_bp(request):
+    """\u0411\u0438\u043b\u0435\u0442 \u0441\u0435\u0437\u043e\u043d\u0430: \u043e\u0447\u043a\u0438, \u0443\u0440\u043e\u0432\u0435\u043d\u044c, \u043d\u0430\u0433\u0440\u0430\u0434\u044b."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    save_store(d)
+    return web.json_response({**bp_state(acc), **wallet_view(acc)})
+
+async def api_bp_claim(request):
+    """\u0417\u0430\u0431\u0440\u0430\u0442\u044c \u043d\u0430\u0433\u0440\u0430\u0434\u044b \u0437\u0430 \u0432\u0441\u0435 \u0434\u043e\u0441\u0442\u0438\u0436\u043d\u044b\u0435 \u0443\u0440\u043e\u0432\u043d\u0438."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    try:
+        want = int(body.get("level", 0))
+    except Exception:
+        return web.json_response({"error": "bad level"}, status=400)
+    d = load_store(); acc = acc_of(d, uid)
+    bp = bp_acc(acc)
+    coins = int(bp.get("coins", 0))
+    claimed = set(bp.get("claimed", []))
+    if want <= 1:
+        return web.json_response({"ok": False, "error": "nothing to claim", **bp_state(acc), **wallet_view(acc)})
+    if want in claimed:
+        return web.json_response({"ok": False, "error": "already claimed", **bp_state(acc), **wallet_view(acc)})
+    if want > len(BP_LEVELS) or coins < BP_LEVELS[want - 1]["coins"]:
+        return web.json_response({"ok": False, "error": "level locked", **bp_state(acc), **wallet_view(acc)})
+    got = bp_apply_reward(acc, BP_LEVELS[want - 1].get("reward", {}))
+    claimed.add(want); bp["claimed"] = sorted(claimed)
+    save_store(d)
+    return web.json_response({"ok": True, "level": want, "got": got,
+                              **bp_state(acc), **wallet_view(acc)})
+
+@dp.message(Command("pass"))
+async def pass_cmd(message: types.Message):
+    """\u041a\u043e\u043c\u0430\u043d\u0434\u0430 /pass: \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u0431\u0438\u043b\u0435\u0442\u0430 \u0441\u0435\u0437\u043e\u043d\u0430."""
+    d = load_store(); acc = acc_of(d, message.from_user.id)
+    st = bp_state(acc)
+    lines = ["\U0001F39F <b>\u0411\u0438\u043b\u0435\u0442 \u0441\u0435\u0437\u043e\u043d\u0430</b>\n"]
+    for l in st["levels"]:
+        mark = "\u2714\ufe0f" if l["claimed"] else ("\U0001f3c1" if l["unlocked"] else "\u2022")
+        lines.append(f"{mark} \u0423\u0440\u043e\u0432\u0435\u043d\u044c {l['level']}: {l['name']}")
+    lines.append(f"\n\u041e\u0447\u043a\u043e\u0432: {st['coins']} \U0001FA99 \u00b7 \u0443\u0440\u043e\u0432\u0435\u043d\u044c {st['level']}")
+    if st["to_next"]:
+        lines.append(f"\u0414\u043e \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0433\u043e \u0443\u0440\u043e\u0432\u043d\u044f: {st['to_next']} \U0001FA99")
+    lines.append("\n\u0417\u0430\u0431\u0440\u0430\u0442\u044c \u043d\u0430\u0433\u0440\u0430\u0434\u044b \u043c\u043e\u0436\u043d\u043e \u0432 \u0438\u0433\u0440\u0435 \u0432 \u043f\u0440\u043e\u0444\u0438\u043b\u0435:")
+    await message.answer("\n".join(lines), reply_markup=kb())
+
+
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "")
 
 async def api_admin_credit(request):
@@ -1923,6 +2078,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/tourney", api_tourney)
     app.router.add_post("/api/contest", api_contest)
     app.router.add_post("/api/contest/buy", api_contest_buy)
+    app.router.add_post("/api/bp", api_bp)
+    app.router.add_post("/api/bp/claim", api_bp_claim)
 
     @web.middleware
     async def cors_mw(request, handler):
