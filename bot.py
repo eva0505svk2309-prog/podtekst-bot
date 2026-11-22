@@ -1242,9 +1242,11 @@ async def api_channel_sub(request):
     try:
         member = await bot.get_chat_member(CHAT_ID, uid)
     except Exception as e:
-        logging.warning("get_chat_member failed: %s", e)
+        # Telegram отдаёт PARTICIPANT_ID_INVALID, если игрок просто не подписан
+        # на канал. Это не ошибка проверки, а честный «не подписан».
+        logging.info("get_chat_member: %s", e)
         return web.json_response({"ok": True, "subscribed": False, "reward": 0,
-                                  "check_failed": True})
+                                  "check_failed": False})
     st = getattr(member, "status", "")
     subscribed = st in ("member", "administrator", "creator", "restricted")
     if not subscribed:
