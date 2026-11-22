@@ -1637,6 +1637,16 @@ CONTEST_PRIZE_GIFT_EMOJI = "💎"      # 100 звёзд номинала
 CONTEST_PRIZE_GIFT_FALLBACK = ["💎", "🏆", "💍", "🎂", "🚀"]  # запасные, если нет в каталоге
 CONTEST_PRIZE_STARS_EQUIV = 100      # номинал приза в звёздах (для текстов)
 
+# Призовые места: 1 -> 100 Stars, 2 -> 50, 3 -> 25 (эквивалент в подарках Telegram).
+# Подарок даёт ~N звёзд номинала. Бот не может перевести Stars пользователю
+# (в Bot API нет такого метода), поэтому звёздная часть выдаётся ПОДАРКОМ.
+CONTEST_PLACES = [
+    {"place": 1, "stars": 100, "coins": 1000, "lives": 5, "gift": "💎"},
+    {"place": 2, "stars": 50,  "coins": 500,  "lives": 3, "gift": "🏆"},
+    {"place": 3, "stars": 25,  "coins": 300,  "lives": 2, "gift": "🎁"},
+]
+CONTEST_PRIZE_STARS_EQUIV = CONTEST_PLACES[0]["stars"]  # номинал 1-го места для текстов
+
 # Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
 CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
 
@@ -1735,6 +1745,7 @@ async def api_contest(request):
         "prize_lives": CONTEST_PRIZE["lives"],
         "prize_stars": CONTEST_PRIZE_STARS_EQUIV,
         "prize_gift": CONTEST_PRIZE_GIFT_EMOJI,
+        "places": CONTEST_PLACES,
         "ends_at": CONTEST_END,
         "top": top,
         "my_place": my_place,
