@@ -251,6 +251,18 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
 </div>
 
 <!-- QUIZ -->
+
+<!-- SUBSCRIBE CHANNEL -->
+<div id="subCard" style="margin:10px 0 0;padding:12px 14px;border-radius:16px;background:linear-gradient(135deg,#1b2a4a,#2a1b3d);border:1px solid #3a4a7a">
+ <div style="display:flex;align-items:center;gap:10px">
+  <div style="flex:1">
+   <div style="font-weight:800;font-size:15px">📢 Подпишись на @podtekst_game</div>
+   <div style="font-size:12px;color:#9fb6d4;margin-top:2px">За подписку — <b style="color:#ffd76a">+50 🪙</b> и новые челленджи первыми</div>
+  </div>
+  <button id="subBtn" style="padding:9px 14px;border-radius:12px;border:0;background:#2ea6ff;color:#fff;font-weight:700;cursor:pointer">Подписаться</button>
+ </div>
+ <div id="subStatus" style="font-size:12px;color:#9fb6d4;margin-top:6px;display:none"></div>
+</div>
 <section class="view on" id="v-quiz">
  <div class="card">
   <div id="q">Загрузка…</div>
@@ -1352,6 +1364,39 @@ $("ts").textContent="v3.4";
     try{localStorage.setItem(KEY,"1");}catch(e){}
     document.getElementById("agegate").classList.add("off");};
   try{if(localStorage.getItem(KEY)==="1")document.getElementById("agegate").classList.add("off");}catch(e){}
+})();
+
+/* ---------- subscribe to channel (reward) ---------- */
+(function(){
+ function CHAN(){return "podtekst_game";}
+ function subBtn(){return document.getElementById("subBtn");}
+ function subStatus(){return document.getElementById("subStatus");}
+ async function checkSub(){
+  if(!INIT) return;
+  try{
+   const r=await fetch(API+"/api/channel/sub",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({init_data:INIT})});
+   const j=await r.json();
+   if(j&&j.subscribed){
+    var b=subBtn(); if(b){b.textContent="✓ Вы подписаны"; b.style.background="#2ea043"; b.disabled=true;}
+    var s=subStatus(); if(s){s.style.display="block"; s.innerHTML=(j.reward?("Начислено <b style='color:#ffd76a'>+"+j.reward+" 🪙</b> — зачислено в кошелёк."):"Подписка подтверждена, бонус уже получен.");}
+    if(j.coins&&typeof j.coins==="number"){S.coins=j.coins; try{renderWallet&&renderWallet();}catch(e){}}
+   } else {
+    var s2=subStatus(); if(s2){s2.style.display="block"; s2.textContent="Подпишись на канал @podtekst_game и нажми «Проверить» — бонус придёт сразу.";}
+   }
+  }catch(e){}
+ }
+ function bind(){
+  var b=subBtn(); if(!b||b.dataset.bound) return; b.dataset.bound="1";
+  b.onclick=function(){
+   try{ location.href="https://t.me/"+CHAN(); }catch(e){}
+   // после возврата в приложение проверим ещё раз
+   setTimeout(function(){checkSub();},1500);
+   document.addEventListener("visibilitychange",function h(){ if(!document.hidden){document.removeEventListener("visibilitychange",h); setTimeout(checkSub,600);} });
+  };
+  setTimeout(checkSub,800);
+ }
+ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",bind); else bind();
 })();
 </script>
 </body>
