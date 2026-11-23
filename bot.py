@@ -1240,7 +1240,7 @@ async def api_ads_stats(request):
             players[s] = players.get(s, 0) + 1
     return web.json_response({"ok": True, "visits_by_source": visits,
                               "players_by_source": players,
-                              "total_players": len(players),
+                              "total_players": sum(players.values()),
                               "uid": str(uid) if uid else None})
 
 async def api_promo_stats(request):
@@ -2284,9 +2284,9 @@ async def publish_daily_post():
             chat_id=CHAT_ID,
             text=(f"\U0001F9E0 <b>Что он имел в виду?</b>\n\n"
                   f"{question}\n\n"
-                  f"1\. {options[0]}\n"
-                  f"2\. {options[1]}\n"
-                  f"3\. {options[2]}\n\n"
+                  f"1. {options[0]}\n"
+                  f"2. {options[1]}\n"
+                  f"3. {options[2]}\n\n"
                   f"\U0001F3AF Голосуйте, правильный ответ — в комментариях завтра.\n\n"
                   f"{teaser}\n\n"
                   f"\U0001F3AE <a href=\"https://t.me/podtekst_game_bot\">Играть: @podtekst_game_bot</a>"),
