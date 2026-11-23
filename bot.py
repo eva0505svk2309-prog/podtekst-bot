@@ -175,8 +175,8 @@ async def start(message: types.Message):
         f"<b>+{SUB_REWARD} 🪙</b> на кошелёк.\n"
         f"🎉 И играй в розыгрыш: 1 место — 100 ⭐, 2 — 50 ⭐, 3 — 25 ⭐. "
         f"Каждые 30 очков активности = 1 билет, бесплатно. Финал — 15 декабря.\n\n"
-        f"🤖 Нужен ИИ-помощник в Telegram? Забери Mira по ссылке и получи "
-        f"<b>+{PROMO_REWARD} 🪙</b> в игре:\n{MIRA_URL}", reply_markup=kb(src_code))
+        f"🤖 ИИ-помощник Mira даст <b>+{PROMO_REWARD} 🪙</b> — забери бонус "
+        f"в профиле, в разделе «Mira».", reply_markup=kb(src_code))
 
 @dp.message(Command("referral"))
 async def referral(message: types.Message):
@@ -262,15 +262,8 @@ async def mira_cmd(message: types.Message):
     await message.answer(
         f"{PROMO_TITLE}\n\n{PROMO_TEXT}\n\n"
         f"Твоя ссылка:\n{MIRA_URL}\n\n"
-        f"Подключи Mira и возвращайся в игру — начислю <b>+{PROMO_REWARD} 🪙</b> "
-        "(один раз).", reply_markup=kb())
-
-@dp.message(Command("mira"))
-async def mira_cmd2(message: types.Message):
-    await message.answer(
-        f"{PROMO_TITLE}\n\n{PROMO_TEXT}\n\n"
-        f"Твоя ссылка:\n{MIRA_URL}\n\n"
-        f"Подключи Mira и возвращайся в игру — начислю <b>+{PROMO_REWARD} 🪙</b> (один раз).\n\n"
+        f"Подключи Mira и вернись в игру — начислю <b>+{PROMO_REWARD} 🪙</b> "
+        "(один раз, автоматически).\n\n"
         "Разобрать свою фразу: отправь её сюда сообщением — я подскажу, что в ней скрыто.",
         reply_markup=kb())
 
@@ -1243,23 +1236,69 @@ async def api_ads_stats(request):
                               "total_players": sum(players.values()),
                               "uid": str(uid) if uid else None})
 
+async def api_promo_return(request):
+    """Игрок вернулся в игру после перехода к Mira.
+
+    Раньше бонус +50 выдавался только по нажатию кнопки «+50 🪙» — игрок
+    уходил к Mira и терял монеты, потому что вспомнить про кнопку сложно.
+    Теперь факт возврата фиксируется сам, и бонус начисляется автоматически,
+    один раз за аккаунт.
+
+    Считаем и «возвраты»: сколько игроков реально вернулись.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    uid = user_from_init(parts) if parts else None
+    if not uid:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    promo = acc.setdefault("promo", {})
+    p = d.setdefault("_promo", {"clicks": 0, "claims": 0})
+    p.setdefault("by_source", {})
+    p.setdefault("returns", 0)
+    try:
+        src = str(body.get("source") or "mira")[:24]
+    except Exception:
+        src = "mira"
+    p["returns"] = int(p.get("returns", 0)) + 1
+    rs = p.setdefault("returns_by_source", {})
+    rs[src] = int(rs.get(src, 0)) + 1
+    already = bool(promo.get("claimed"))
+    if already:
+        save_store(d)
+        return web.json_response({"ok": True, "already": True, "reward": 0,
+                                  "coins": acc.get("coins", 0),
+                                  "lives": acc.get("lives", 5)})
+    acc["coins"] = int(acc.get("coins", 0)) + PROMO_REWARD
+    promo["claimed"] = True
+    promo["ts"] = int(time.time())
+    promo["auto"] = True
+    p["claims"] = int(p.get("claims", 0)) + 1
+    save_store(d)
+    return web.json_response({"ok": True, "reward": PROMO_REWARD, "auto": True,
+                              "coins": acc.get("coins", 0),
+                              "lives": acc.get("lives", 5)})
+
+
 async def api_promo_stats(request):
     """Статистика по рекламным местам — какое место приносит больше кликов."""
     try:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "bad json"}, status=400)
-    parts = validate_init_data(body.get("init_data", ""))
-    if not parts:
-        return web.json_response({"error": "bad init_data"}, status=401)
-    uid = user_from_init(parts)
-    if not uid:
-        return web.json_response({"error": "no user"}, status=401)
+    # Агрегаты по воронке — обезличенные, поэтому доступны без init_data:
+    # их можно читать извне (мониторинг), не раскрывая ничьих данных.
     d = load_store()
     p = d.get("_promo", {}) or {}
-    return web.json_response({"ok": True, "clicks": int(p.get("clicks", 0)),
+    return web.json_response({"ok": True,
+                              "clicks": int(p.get("clicks", 0)),
                               "claims": int(p.get("claims", 0)),
+                              "returns": int(p.get("returns", 0)),
                               "by_source": p.get("by_source", {}) or {},
+                              "returns_by_source": p.get("returns_by_source", {}) or {},
                               "visits_by_source": p.get("visits_by_source", {}) or {}})
 
 
@@ -1291,6 +1330,35 @@ def _lb_rows(d, limit=20):
     rows.sort(key=lambda r: -r["score"])
     return rows[:limit]
 
+
+async def api_ad_reward(request):
+    """Просмотр rewarded-рекламы -> +монеты. Антифрод: лимит в сутки на пользователя."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    if acc.get("noads"):
+        save_store(d)
+        return web.json_response({"ok": True, "reward": 0, "skipped": True, **wallet_view(acc)})
+    import datetime
+    today = datetime.date.today().isoformat()
+    seen = acc.setdefault("ad_seen", {})
+    n = int(seen.get(today, 0) or 0)
+    if n >= 5:
+        save_store(d)
+        return web.json_response({"ok": False, "error": "ad limit", **wallet_view(acc)})
+    seen[today] = n + 1
+    acc["coins"] += 15
+    contest_add_points(d, acc, "ad", 5); bp_add_points(d, acc, "ad")
+    save_store(d)
+    return web.json_response({"ok": True, "reward": 15, "left": 5 - n - 1, **wallet_view(acc)})
 
 async def api_channel_sub(request):
     """Игрок подписался на канал — проверяем через get_chat_member и платим разово."""
@@ -2180,10 +2248,12 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/claim", api_promo_claim)
     app.router.add_post("/api/mira/hint", api_mira_hint)
     app.router.add_post("/api/promo/stats", api_promo_stats)
+    app.router.add_post("/api/promo/return", api_promo_return)
     app.router.add_post("/api/ads/stats", api_ads_stats)
     app.router.add_post("/api/leaderboard", api_leaderboard)
     app.router.add_post("/api/share/score", api_share_score)
     app.router.add_post("/api/channel/sub", api_channel_sub)
+    app.router.add_post("/api/ad/reward", api_ad_reward)
     app.router.add_post("/api/cards", api_cards)
     app.router.add_post("/api/tourney", api_tourney)
     app.router.add_post("/api/contest", api_contest)

@@ -365,14 +365,16 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    <div class="small" style="margin-top:6px">Друг пришёл → тебе +50 🪙, ему +20 🪙. Каждые 3 друга — ещё +100 🪙 и +1 💗.</div>
   </div>
  </div>
- <div class="card" style="margin-bottom:10px">
+ <div class="card" style="margin-bottom:10px" id="promoCard">
   <div style="font-weight:800;margin-bottom:6px">🤖 Mira — ИИ, который тебя понимает</div>
-  <div id="promoText" style="font-size:13px;color:#9fb6d4;margin-bottom:9px">Подключи Mira в Telegram и получи +50 🪙 за подключение.</div>
+  <div id="promoText" style="font-size:13px;color:#9fb6d4;margin-bottom:9px">Подключи Mira в Telegram — вернёшься в игру, и +50 🪙 прилетят автоматически.</div>
   <div class="row" style="gap:8px">
-   <button class="pri" id="promoGo" style="flex:1">Подключить Mira</button>
+   <button class="pri" id="promoGo" style="flex:1">Получить +50 🪙 за Mira</button>
    <button id="promoClaim" style="white-space:nowrap">+50 🪙</button>
   </div>
-  <div class="small" style="margin-top:7px" id="promoNote">Подключишь — вернись и забери бонус. Один раз.</div>
+  <div class="small" style="margin-top:7px" id="promoNote">Бонус придёт сам, как только вернёшься в игру. Один раз.</div>
+  <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +15 🪙</button></div>
+  <div class="small" style="margin-top:6px" id="adNote">До 5 просмотров в день.</div>
  </div>
 <div class="card" style="margin-bottom:10px" id="bpCard">
   <div style="font-weight:800;margin-bottom:6px">🎟️ Билет сезона</div>
@@ -1272,7 +1274,30 @@ function initReferral(){
   if(j&&j.ok){ cl.textContent="+50 🪙 получено"; cl.disabled=true; toast("Бонус начислен: +50 🪙"); if(typeof j.coins==="number"){S.coins=j.coins;paint();} }
   else { toast("Бонус уже получен"); cl.disabled=true; }
  };
- var pt=$("promoText"); if(pt) pt.textContent="Подключи Mira в Telegram и получи +50 🪙 за подключение.";
+ var pt=$("promoText"); if(pt) pt.textContent="Подключи Mira в Telegram — вернёшься в игру, и +50 🪙 прилетят автоматически.";
+ var pn=$("promoNote"); if(pn) pn.textContent="Бонус придёт сам, как только вернёшься в игру. Один раз.";
+ /* Бонус начисляется автоматически при возврате из Mira.
+    Раньше игрок уходил к Mira и терял 50 монет: вспомнить про кнопку почти невозможно. */
+ try{
+  fetch(API+"/api/promo/return",{method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({init_data:INIT,source:"mira"})}).then(function(r){return r.json();}).then(function(j){
+   if(j&&j.ok&&j.reward){ toast("Бонус за Mira начислен: +"+j.reward+" 🪙");
+    if(typeof j.coins==="number"){S.coins=j.coins;paint();}
+    var c2=$("promoClaim"); if(c2){c2.textContent="+50 🪙 получено"; c2.disabled=true;}
+    var n2=$("promoNote"); if(n2) n2.textContent="Бонус получен. Спасибо за подключение!";
+   }
+  }).catch(function(){});
+ }catch(e){}
+ /* Rewarded-реклама: +15 🪙 за просмотр, лимит 5 в день (лимит держит сервер). */
+ var ad=$("adBtn"); if(ad) ad.onclick=async function(){
+  var j=await api2("/api/ad/reward",{});
+  if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙"; toast("Начислено +"+j.reward+" 🪙");
+   if(typeof j.coins==="number"){S.coins=j.coins;paint();}
+   var an=$("adNote"); if(an&&typeof j.left==="number") an.textContent="Осталось просмотров сегодня: "+j.left;
+  } else if(j&&j.error==="ad limit"){ ad.disabled=true; ad.textContent="Реклама на сегодня закончилась";
+   var an2=$("adNote"); if(an2) an2.textContent="Приходи завтра — будут новые монеты.";
+  } else { toast("Реклама сейчас недоступна"); }
+ };
  loadReferral();
 }
 /* ---------- DAILY ---------- */
