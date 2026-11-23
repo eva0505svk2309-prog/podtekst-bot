@@ -411,9 +411,14 @@ def grant(user_id, payload):
     elif payload == "lives": acc["lives"] += 1
     elif payload == "noads": acc["noads"] = True
     elif payload == "contest_entry":
-        c = contest_tickets(acc_of(d, user_id))
-        c["tickets"] = int(c.get("tickets", 0)) + CONTEST_TICKETS_PAID
-        c["paid_tickets"] = int(c.get("paid_tickets", 0)) + CONTEST_TICKETS_PAID
+        acc = acc_of(d, user_id)
+        tier = active_tier(acc)
+        if not tier:
+            return acc
+        c = contest_tickets(acc)
+        row = c["tiers"].setdefault(tier["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
+        row["tickets"] = int(row.get("tickets", 0)) + CONTEST_TICKETS_PAID
+        row["paid_tickets"] = int(row.get("paid_tickets", 0)) + CONTEST_TICKETS_PAID
     save_store(d)
     return acc
 
@@ -1793,6 +1798,83 @@ CONTEST_PRIZE_STARS_EQUIV = CONTEST_PLACES[0]["stars"]  # номинал 1-го 
 # Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
 CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
 
+# ---------------- ГЕЙТИНГ: конкурсы открываются по турам ----------------
+# Три ступени конкурса. Каждая открывается только тем, кто реально прошёл
+# предыдущую: без гейтинга в конкурс заходили все подряд после 30 очков,
+# и приз разбирали 2-3 человека, а база не росла.
+# Требования читаются из профиля игрока (уровень match-3, серии, турнир).
+CONTEST_TIERS = [
+    {"id": "t1", "name": "Конкурс подтекста", "emoji": "🎯",
+     "prize_stars": 25, "prize_coins": 300, "winners": 3,
+     "points": 30, "start": "2026-11-21T00:00:00", "end": "2026-12-01T23:59:00",
+     "req": {"m3_lvl": 2, "quiz_streak": 3}},
+    {"id": "t2", "name": "Ночной конкурс", "emoji": "🌙",
+     "prize_stars": 50, "prize_coins": 500, "winners": 1,
+     "points": 60, "start": "2026-11-28T00:00:00", "end": "2026-12-08T23:59:00",
+     "req": {"m3_lvl": 10, "day_streak": 3}, "after": "t1"},
+    {"id": "t3", "name": "Финал месяца", "emoji": "👑",
+     "prize_stars": 100, "prize_coins": 1000, "winners": 1,
+     "points": 100, "start": "2026-12-08T00:00:00", "end": "2026-12-15T23:59:00",
+     "req": {"tourney": 100}, "after": "t2"},
+]
+
+def tier_by_id(tid):
+    for t in CONTEST_TIERS:
+        if t["id"] == tid:
+            return t
+    return None
+
+def tier_req_met(acc, tier):
+    """Проверяет, выполнены ли требования ступени (уровни, серии, турнир)."""
+    req = tier.get("req") or {}
+    m3 = acc.get("m3") or {}
+    if "m3_lvl" in req and int(m3.get("lvl", 1)) < int(req["m3_lvl"]):
+        return False
+    if "quiz_streak" in req and int(acc.get("quiz_streak", 0)) < int(req["quiz_streak"]):
+        return False
+    if "day_streak" in req and int(acc.get("day_streak", 0)) < int(req["day_streak"]):
+        return False
+    if "tourney" in req:
+        t = acc.get("tourney") or {}
+        if int(t.get("score", 0)) < int(req["tourney"]):
+            return False
+    return True
+
+def tier_unlocked(acc, tier):
+    """Ступень открыта: требования выполнены И предыдущая ступень пройдена."""
+    if not tier_req_met(acc, tier):
+        return False
+    prev = tier.get("after")
+    if prev:
+        pt = tier_by_id(prev)
+        if pt:
+            st = contest_tiers(acc)
+            # предыдущая ступень должна быть не просто открыта, а пройдена (есть билет)
+            if int(st["tiers"].get(prev, {}).get("tickets", 0)) <= 0:
+                return False
+    return True
+
+def tier_unlocked_ids(acc):
+    return [t["id"] for t in CONTEST_TIERS if tier_unlocked(acc, t)]
+
+def tier_state(acc, tier):
+    """Состояние одной ступени: открыта ли, прогресс, билеты."""
+    st = contest_tickets(acc)
+    row = st["tiers"].get(tier["id"], {})
+    return {"id": tier["id"], "name": tier["name"], "emoji": tier.get("emoji", ""),
+            "prize_stars": tier.get("prize_stars", 0),
+            "prize_coins": tier.get("prize_coins", 0),
+            "winners": tier.get("winners", 1),
+            "points_needed": tier.get("points", CONTEST_TICKET_POINTS),
+            "points": int(row.get("points", 0)),
+            "tickets": int(row.get("tickets", 0)),
+            "paid_tickets": int(row.get("paid_tickets", 0)),
+            "unlocked": tier_unlocked(acc, tier),
+            "req": tier.get("req", {}),
+            "req_met": tier_req_met(acc, tier),
+            "after": tier.get("after"),
+            "start": tier.get("start"), "end": tier.get("end")}
+
 def _msk():
     """Текущее время по Москве (aware)."""
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
@@ -1814,12 +1896,47 @@ def contest_state():
     return "running"
 
 def contest_tickets(acc):
-    """Сколько билетов уже есть у игрока (купленных за Stars)."""
-    c = acc.setdefault("contest", {"points": 0, "paid_tickets": 0, "tickets": 0})
-    c.setdefault("points", 0)
-    c.setdefault("paid_tickets", 0)
-    c.setdefault("tickets", 0)
+    """Билеты и очки игрока ПО СТУПЕНЯМ конкурса.
+
+    Старая схема (points/paid_tickets/tickets на верхнем уровне) остаётся
+    для совместимости со старыми записями: переносим их в первую ступень.
+    """
+    c = acc.setdefault("contest", {"tiers": {}})
+    tiers = c.setdefault("tiers", {})
+    for t in CONTEST_TIERS:
+        row = tiers.setdefault(t["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
+        row.setdefault("points", 0)
+        row.setdefault("paid_tickets", 0)
+        row.setdefault("tickets", 0)
+    # миграция старых (плоских) данных в первую ступень
+    legacy = int(c.get("points", 0) or 0)
+    if legacy:
+        tiers["t1"]["points"] = int(tiers["t1"].get("points", 0)) + legacy
+        c["points"] = 0
+    legacy_t = int(c.get("tickets", 0) or 0)
+    if legacy_t:
+        tiers["t1"]["tickets"] = int(tiers["t1"].get("tickets", 0)) + legacy_t
+        c["tickets"] = 0
+    legacy_p = int(c.get("paid_tickets", 0) or 0)
+    if legacy_p:
+        tiers["t1"]["paid_tickets"] = int(tiers["t1"].get("paid_tickets", 0)) + legacy_p
+        c["paid_tickets"] = 0
     return c
+
+def active_tier(acc):
+    """Активная ступень: самая высокая, которую игрок открыл и которая идёт."""
+    now = _msk()
+    opened = tier_unlocked_ids(acc)
+    best = None
+    for t in CONTEST_TIERS:
+        if t["id"] not in opened:
+            continue
+        if now < _contest_dt(t.get("start", CONTEST_START)):
+            continue
+        if now > _contest_dt(t.get("end", CONTEST_END)):
+            continue
+        best = t
+    return best
 
 def contest_add_points(d, acc, kind, amount=None):
     """Начислить очки активности за действие (квиз/match-3/день/рефералка)."""
@@ -1828,13 +1945,18 @@ def contest_add_points(d, acc, kind, amount=None):
     pts = amount if amount is not None else CONTEST_ACTION_POINTS.get(kind, 0)
     if pts <= 0:
         return 0
+    tier = active_tier(acc)
+    if not tier:
+        return 0
     c = contest_tickets(acc)
-    c["points"] = int(c.get("points", 0)) + int(pts)
-    # Каждые 30 очков автоматически превращаются в бесплатный билет
-    gained = c["points"] // CONTEST_TICKET_POINTS
+    row = c["tiers"].setdefault(tier["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
+    row["points"] = int(row.get("points", 0)) + int(pts)
+    # Каждые N очков автоматически превращаются в бесплатный билет
+    need = int(tier.get("points", CONTEST_TICKET_POINTS))
+    gained = row["points"] // need
     if gained:
-        c["points"] -= gained * CONTEST_TICKET_POINTS
-        c["tickets"] = int(c.get("tickets", 0)) + gained
+        row["points"] -= gained * need
+        row["tickets"] = int(row.get("tickets", 0)) + gained
     return pts
 
 async def api_contest(request):
@@ -1854,13 +1976,18 @@ async def api_contest(request):
     c = contest_tickets(acc)
     save_store(d)
 
-    # Рейтинг участников по билетам
+    tier = active_tier(acc)
+    opened = tier_unlocked_ids(acc)
+
+    # Рейтинг участников по билетам АКТИВНОЙ ступени
     rows = []
     for k, a in d.items():
         if not k.isdigit() or not isinstance(a, dict):
             continue
         cc = a.get("contest") or {}
-        t = int(cc.get("tickets", 0))
+        tt = (cc.get("tiers") or {})
+        tid = tier["id"] if tier else "t1"
+        t = int((tt.get(tid) or {}).get("tickets", 0))
         if t <= 0:
             continue
         rows.append({"uid": k, "name": a.get("name") or a.get("first_name") or "Игрок",
@@ -1874,22 +2001,28 @@ async def api_contest(request):
             my_place = i + 1
             break
 
+    tiers_view = [tier_state(acc, t) for t in CONTEST_TIERS]
+    active = tier_state(acc, tier) if tier else None
+
     return web.json_response({
         "ok": True,
         "state": contest_state(),
-        "points": int(c.get("points", 0)),
-        "points_needed": CONTEST_TICKET_POINTS,
-        "tickets": int(c.get("tickets", 0)),
-        "paid_tickets": int(c.get("paid_tickets", 0)),
+        "tiers": tiers_view,
+        "active_tier": active,
+        "unlocked": opened,
+        "points": active["points"] if active else 0,
+        "points_needed": active["points_needed"] if active else CONTEST_TICKET_POINTS,
+        "tickets": active["tickets"] if active else 0,
+        "paid_tickets": active["paid_tickets"] if active else 0,
         "paid_stars": CONTEST_TICKET_STARS,
         "paid_tickets_amount": CONTEST_TICKETS_PAID,
-        "winners": CONTEST_WINNERS,
-        "prize_coins": CONTEST_PRIZE["coins"],
+        "winners": (tier.get("winners") if tier else CONTEST_WINNERS),
+        "prize_coins": (tier.get("prize_coins") if tier else CONTEST_PRIZE["coins"]),
         "prize_lives": CONTEST_PRIZE["lives"],
-        "prize_stars": CONTEST_PRIZE_STARS_EQUIV,
+        "prize_stars": (tier.get("prize_stars") if tier else CONTEST_PRIZE_STARS_EQUIV),
         "prize_gift": CONTEST_PRIZE_GIFT_EMOJI,
         "places": CONTEST_PLACES,
-        "ends_at": CONTEST_END,
+        "ends_at": (tier.get("end") if tier else CONTEST_END),
         "top": top,
         "my_place": my_place,
         "players": len(rows),
@@ -1915,9 +2048,14 @@ async def api_contest_buy(request):
     if contest_state() != "running":
         return web.json_response({"ok": False, "error": "contest closed"})
     d = load_store(); acc = acc_of(d, uid)
+    tier = active_tier(acc)
+    if not tier:
+        return web.json_response({"ok": False, "error": "tier locked",
+                                  "msg": "Сначала пройди предыдущие туры — конкурс откроется"})
     contest_tickets(acc); save_store(d)
     return web.json_response({"ok": True, "stars": CONTEST_TICKET_STARS,
                               "tickets": CONTEST_TICKETS_PAID,
+                              "tier": tier["id"],
                               "method": "stars"})
 
 @dp.message(Command("contest"))
@@ -1925,18 +2063,36 @@ async def contest_cmd(message: types.Message):
     """Команда /contest: правила и статус розыгрыша."""
     d = load_store(); acc = acc_of(d, message.from_user.id)
     c = contest_tickets(acc)
-    await message.answer(
-        "\U0001F3C6 <b>Призовой конкурс ПОДТЕКСТ</b>\n\n"
-        "Приз: <b>100 Stars</b> + 500 монет + 3 жизни + без рекламы\n"
-        f"Победителей: {CONTEST_WINNERS}\n"
-        f"Дедлайн: {CONTEST_END[:10]}\n\n"
-        "<b>Бесплатный вход:</b> играй, копи очки активности — "
-        f"каждые {CONTEST_TICKET_POINTS} очков = 1 билет.\n"
-        "<b>Платный вход:</b> 100 Stars = 5 билетов.\n\n"
-        f"Твои очки: {c.get('points', 0)}/{CONTEST_TICKET_POINTS} · "
-        f"билетов: {c.get('tickets', 0)}\n\n"
-        "Играй тут:",
-        reply_markup=kb())
+    tier = active_tier(acc)
+    lines = ["\U0001F3C6 <b>Призовые конкурсы ПОДТЕКСТ</b>\n\n"]
+    for t in CONTEST_TIERS:
+        st = tier_state(acc, t)
+        mark = "\u2705" if st["unlocked"] else "\U0001F512"
+        if tier and t["id"] == tier["id"]:
+            mark = "\u2b50"
+        need = ""
+        r = t.get("req") or {}
+        if "m3_lvl" in r: need += f"\n   · match-3 уровень {r['m3_lvl']}"
+        if "quiz_streak" in r: need += f"\n   · {r['quiz_streak']} верных ответов подряд"
+        if "day_streak" in r: need += f"\n   · {r['day_streak']} дня подряд"
+        if "tourney" in r: need += f"\n   · {r['tourney']} очков в турнире недели"
+        if t.get("after"):
+            need += "\n   · пройден предыдущий конкурс"
+        lines.append(f"{mark} <b>{t['emoji']} {t['name']}</b> — приз {t['prize_stars']} Stars"
+                     f" + {t['prize_coins']} монет, {t['winners']} победител."
+                     f"\n   Билет: каждые {t['points']} очков активности."
+                     f"\n   Дедлайн: {t['end'][:10]}" + (need if not st["unlocked"] else ""))
+        lines.append("")
+    lines.append("<b>Вход:</b> бесплатно — очками активности; платно — 100 Stars = 5 билетов.")
+    lines.append(f"Дедлайн финала: {CONTEST_END[:10]}")
+    if tier:
+        st = tier_state(acc, tier)
+        lines.append(f"\nТвоя ступень: <b>{tier['name']}</b> · "
+                     f"очки {st['points']}/{st['points_needed']} · билетов {st['tickets']}")
+    else:
+        lines.append("\nСейчас доступна <b>первая ступень</b> — пройди её, чтобы открыть следующую.")
+    lines.append("\nИграй тут:")
+    await message.answer("\n".join(lines), reply_markup=kb())
 
 @dp.message(Command("giveprize"))
 async def giveprize(message: types.Message):
