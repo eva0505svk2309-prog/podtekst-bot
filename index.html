@@ -383,11 +383,12 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="bpLevels" style="margin-top:9px"></div>
  </div>
 <div class="card" style="margin-bottom:10px" id="ctCard">
-  <div style="font-weight:800;margin-bottom:6px">🏆 Призовой конкурс</div>
-  <div id="ctState" style="font-size:13px;color:#9fb6d4;margin-bottom:9px">Приз: 100 Stars + 500 монет + 3 жизни + без рекламы · 3 победителя · до 15 декабря</div>
+  <div style="font-weight:800;margin-bottom:6px">🏆 Призовые конкурсы</div>
+  <div id="ctState" style="font-size:13px;color:#9fb6d4;margin-bottom:9px">Три ступени: пройди туры — откроются конкурсы</div>
+  <div id="ctTiers" style="display:flex;flex-direction:column;gap:7px;margin-bottom:9px"></div>
   <div class="row" style="gap:8px;align-items:center">
    <div style="flex:1"><div class="big" id="ctTickets" style="font-size:22px;font-weight:900">0</div><div class="lbl">билетов</div></div>
-   <div style="flex:1"><div class="big" id="ctPoints" style="font-size:22px;font-weight:900">0</div><div class="lbl">из 30 до билета</div></div>
+   <div style="flex:1"><div class="big" id="ctPoints" style="font-size:22px;font-weight:900">0</div><div class="lbl">до билета</div></div>
    <div style="flex:1"><div class="big" id="ctPlace" style="font-size:22px;font-weight:900">—</div><div class="lbl">место</div></div>
   </div>
   <div style="margin-top:9px"><button id="ctBuy" style="width:100%">💎 +5 билетов за 100 Stars</button></div>
@@ -1290,16 +1291,42 @@ async function loadContest(){
  var j=await api2("/api/contest",{});
  if(!j||!j.ok)return;
  var st=$("ctState");
- if(st){ var s=j.state||"running";
-  st.textContent="Приз: 100 Stars + 500 монет + 3 жизни + без рекламы · "+(j.winners||3)+" победителя · "+(s==="running"?"до 15 декабря":(s==="ended"?"конкурс завершён":"скоро старт")); }
- var t=$("ctTickets"); if(t) t.textContent=(j.tickets||0);
+ if(st){ var act=j.active_tier;
+  st.textContent = act ? ("Сейчас открыт: "+act.emoji+" "+act.name+" · приз "+act.prize_stars+" Stars + "+act.prize_coins+" монет · до "+String(act.end||"").slice(5,10))
+   : "Пройди первый тур — конкурс откроется"; }
+ var box=$("ctTiers");
+ if(box&&j.tiers){ box.innerHTML="";
+  j.tiers.forEach(function(t){
+   var d=document.createElement("div");
+   var lock=t.unlocked?"":" locked";
+   d.className="ach"+lock;
+   var reqTxt="";
+   var r=t.req||{};
+   if(!t.unlocked){
+    if(r.m3_lvl) reqTxt+=" · match-3 ур. "+r.m3_lvl;
+    if(r.quiz_streak) reqTxt+=" · "+r.quiz_streak+" ответов подряд";
+    if(r.day_streak) reqTxt+=" · "+r.day_streak+" дня подряд";
+    if(r.tourney) reqTxt+=" · "+r.tourney+" очков в турнире";
+    if(t.after) reqTxt+=" · после предыдущего тура";
+   }
+   d.innerHTML='<div class="ic">'+t.emoji+'</div><div><div class="nm">'+t.name+
+     '</div><div class="ds">Приз '+t.prize_stars+" Stars + "+t.prize_coins+" монет · "+
+     t.winners+" победител."+(reqTxt?"<br><span style='color:#ffb36b'>Нужно:"+reqTxt+"</span>":"")+
+     '</div></div><div class="tag'+(t.unlocked?"":" lock")+'">'+(t.unlocked?"открыт":"закрыт")+'</div>';
+   box.appendChild(d);
+  });
+ }
+ var t2=$("ctTickets"); if(t2) t2.textContent=(j.tickets||0);
  var p=$("ctPoints"); if(p) p.textContent=(j.points||0)+"/"+(j.points_needed||30);
  var pl=$("ctPlace"); if(pl) pl.textContent=(j.my_place?("#"+j.my_place):"—");
  var n=$("ctNote");
  if(n){ var left=(j.points_needed||30)-(j.points||0);
-  n.textContent = (left>0?("До бесплатного билета осталось "+left+" очков. "):("Билет начислен! "))+"Победителей: "+(j.winners||3)+"."; }
+  var a=j.active_tier;
+  n.textContent = (left>0?("До бесплатного билета осталось "+left+" очков. "):("Билет начислен! "))+
+   (a?("Ступень: "+a.name+". Победителей: "+a.winners+"."):"Пройди первый тур, чтобы открыть конкурс."); }
  var b=$("ctBuy");
- if(b){ if(j.paid_tickets){ b.textContent="💎 Купить ещё 5 билетов"; } }
+ if(b){ if(!j.active_tier){ b.disabled=true; b.textContent="🔒 Конкурс пока закрыт"; }
+  else if(j.paid_tickets){ b.textContent="💎 Купить ещё 5 билетов"; } }
 }
 async function buyContestTickets(){
  var b=$("ctBuy"); if(b){ b.disabled=true; b.textContent="Открываю оплату…"; }
