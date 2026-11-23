@@ -412,7 +412,16 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <button id="pRefresh">🔄 Обновить</button>
   <button id="pShare">📤 Поделиться</button>
  </div>
+<div class="card" style="margin-bottom:10px" id="lbCard">
+  <div style="font-weight:800;margin-bottom:6px">🏅 Таблица лидеров</div>
+  <div id="lbList" style="font-size:13px;color:#9fb6d4">Загрузка…</div>
+  <div class="row" style="gap:8px;margin-top:10px">
+   <button class="pri" id="lbShare" style="flex:1">📤 Поделиться результатом</button>
+  </div>
+  <div class="small" style="margin-top:6px" id="lbNote">Публикация в @podtekst_game даёт +15 очков активности и +15 🪙.</div>
+ </div>
 </section>
+
 
 <!-- DAILY -->
 <section class="view" id="v-day">
@@ -531,6 +540,15 @@ var LOC=(function(){
           return Promise.resolve({ok:true,coins:o.coins});
         }
         save(o);return Promise.resolve({ok:true});
+      }
+      if(path==="/api/leaderboard"){
+        var o=st();
+        var sc=(o.streak||0)*100+(o.best||0)+(o.level||1)*20+(o.m3&&o.m3.lvl||1)*50+Object.keys(o.days||{}).length*30;
+        var me={uid:"me",name:"Ты",score:sc,streak:o.streak||0,level:o.level||1,m3lvl:(o.m3&&o.m3.lvl)||1,days:Object.keys(o.days||{}).length,place:sc>0?1:null};
+        return Promise.resolve({ok:true,top:sc>0?[{uid:"me",name:"Ты",score:sc,streak:o.streak||0,level:o.level||1}]:[],me:me,total:1});
+      }
+      if(path==="/api/share/score"){
+        return Promise.resolve({ok:true,posted:false});
       }
       if(path==="/api/referral"){ return LOC.referral(); }
       if(path==="/api/promo"){ return LOC.promo(); }
@@ -727,6 +745,39 @@ async function loadBP(){
   BP=j; bpRender();
 }
 
+
+/* ---------- LEADERBOARD + SHARE ---------- */
+async function loadLeaderboard(){
+ var box=$("lbList"); if(!box) return;
+ var j=await api2("/api/leaderboard",{});
+ if(!j||!j.ok){box.textContent="Таблица временно недоступна";return;}
+ var rows=j.top||[], me=j.me||null;
+ if(!rows.length){box.innerHTML="Пока нет результатов — сыграй первый и займи первое место 🏆";return;}
+ var h="";
+ for(var i=0;i<rows.length;i++){
+  var r=rows[i];
+  var mine=(me&&String(r.uid)===String(me.uid));
+  var medal=(i===0?"🥇":(i===1?"🥈":(i===2?"🥉":(i+1))));
+  h+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;'+(mine?'border-radius:8px;background:rgba(255,215,106,.12);padding-left:4px;padding-right:4px;':'')+'">'
+   +'<b style="min-width:26px">'+medal+'</b>'
+   +'<span style="flex:1;'+(mine?'font-weight:800;':'')+'">'+esc(r.name)+(mine?' <span style="font-size:11px;color:#ffd76a">(ты)</span>':'')+'</span>'
+   +'<span style="color:#9fb6d4;font-size:12px">🔥'+r.streak+' · ур.'+r.level+'</span>'
+   +'<b style="min-width:54px;text-align:right">'+r.score+'</b></div>';
+ }
+ if(me&&me.place) h+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a2a55;font-weight:800">Твоё место: '+me.place+' · очков: '+me.score+'</div>';
+ box.innerHTML=h;
+}
+$("lbShare").onclick=async function(){
+ var b=this; b.disabled=true; b.textContent="Публикуем…";
+ try{
+  var j=await api2("/api/share/score",{});
+  if(j&&j.posted){toast("Опубликовано в @podtekst_game! +15 🪙");}
+  else{toast("Не удалось опубликовать — попробуй позже");}
+ }catch(e){toast("Ошибка отправки");}
+ b.disabled=false; b.textContent="📤 Поделиться результатом";
+ try{await loadLeaderboard();}catch(e){}
+};
+
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('on'));
@@ -734,7 +785,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
  $('v-'+b.dataset.v).classList.add('on');
  if(b.dataset.v==='m3' && (!grid || !grid.length)){ try{ startLevel(); }catch(e){} }
- if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); try{initReferral();}catch(e){} try{initContest();}catch(e){} loadBP(); }
+ if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); try{initReferral();}catch(e){} try{initContest();}catch(e){} loadBP(); try{loadLeaderboard();}catch(e){} }
  if(b.dataset.v==='cards'){ loadCards(); loadTourney(); }
 });
 
