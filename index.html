@@ -542,11 +542,30 @@ var LOC=(function(){
         }
         save(o);return Promise.resolve({ok:true});
       }
+      if(path==="/api/attack"){
+        var o=st();
+        var tgt=body.target||"";
+        if(body.action==="revenge"){
+          o.revengeDone=o.revengeDone||{};
+          if(o.revengeDone[tgt])return Promise.resolve({ok:false,error:"no revenge available"});
+          if(o.coins<50)return Promise.resolve({ok:false,error:"not enough coins"});
+          o.coins-=50;o.revengeDone[tgt]=1;save(o);
+          return Promise.resolve({ok:true,revenge:true,coins:o.coins});
+        }
+        if(!tgt)return Promise.resolve({ok:false,error:"bad target"});
+        if(o.coins<50)return Promise.resolve({ok:false,error:"not enough coins"});
+        o.coins-=50;
+        o.attacked=o.attacked||{};
+        o.attacked[tgt]=Date.now();
+        save(o);
+        return Promise.resolve({ok:true,coins:o.coins});
+      }
       if(path==="/api/leaderboard"){
         var o=st();
         var sc=(o.streak||0)*100+(o.best||0)+(o.level||1)*20+(o.m3&&o.m3.lvl||1)*50+Object.keys(o.days||{}).length*30;
         var me={uid:"me",name:"Ты",score:sc,streak:o.streak||0,level:o.level||1,m3lvl:(o.m3&&o.m3.lvl)||1,days:Object.keys(o.days||{}).length,place:sc>0?1:null};
-        return Promise.resolve({ok:true,top:sc>0?[{uid:"me",name:"Ты",score:sc,streak:o.streak||0,level:o.level||1}]:[],me:me,total:1});
+        var ltop=sc>0?[{uid:"me",name:"Ты",score:sc,streak:o.streak||0,level:o.level||1,can_attack:false}]:[];
+        return Promise.resolve({ok:true,top:ltop,me:me,revenge:[],attack_cost:50,total:1});
       }
       if(path==="/api/share/score"){
         return Promise.resolve({ok:true,posted:false});
@@ -764,9 +783,46 @@ async function loadLeaderboard(){
    +'<span style="flex:1;'+(mine?'font-weight:800;':'')+'">'+esc(r.name)+(mine?' <span style="font-size:11px;color:#ffd76a">(ты)</span>':'')+'</span>'
    +'<span style="color:#9fb6d4;font-size:12px">🔥'+r.streak+' · ур.'+r.level+'</span>'
    +'<b style="min-width:54px;text-align:right">'+r.score+'</b></div>';
+  if(r.can_attack){
+   h+='<div style="padding:0 0 8px 34px"><button class="atk" data-t="'+esc(String(r.uid))+'" style="font-size:11px;padding:4px 9px;border-radius:12px;background:#3a1f52;color:#ffd76a;border:1px solid #6a3f9e">⚔️ Напасть (50 🪙)</button></div>';
+  }
  }
  if(me&&me.place) h+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a2a55;font-weight:800">Твоё место: '+me.place+' · очков: '+me.score+'</div>';
+ var rev=j.revenge||[];
+ if(rev.length){
+  h+='<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a2a55"><div style="font-weight:800;color:#ff8a8a;margin-bottom:4px">🩸 На тебя напали</div>';
+  for(var k=0;k<rev.length;k++){
+   h+='<div style="display:flex;align-items:center;gap:8px;padding:3px 0"><span style="flex:1">'+esc(rev[k].name||"Игрок")+'</span>'
+    +'<button class="rvk" data-t="'+esc(String(rev[k].uid))+'" style="font-size:11px;padding:4px 9px;border-radius:12px;background:#4a1f2a;color:#ff8a8a;border:1px solid #7a3040">🗡 Отомстить (50 🪙)</button></div>';
+  }
+  h+='</div>';
+ }
  box.innerHTML=h;
+ box.querySelectorAll(".atk").forEach(function(btn){
+  btn.onclick=async function(){
+   btn.disabled=true;
+   try{
+    var r2=await api2("/api/attack",{target:btn.dataset.t});
+    if(r2&&r2.ok){toast("⚔️ Ты напал. Жертва потеряла жизнь.");if(typeof r2.coins==="number")S.coins=r2.coins;paint();await loadLeaderboard();}
+    else if(r2&&r2.error==="not enough coins"){toast("Не хватает монет 🪙");}
+    else if(r2&&r2.error==="cooldown"){toast("⏳ На него уже нападали. Подожди.");}
+    else{toast("Не получилось 😕");}
+   }catch(e){toast("Ошибка");}
+   btn.disabled=false;
+  };
+ });
+ box.querySelectorAll(".rvk").forEach(function(btn){
+  btn.onclick=async function(){
+   btn.disabled=true;
+   try{
+    var r3=await api2("/api/attack",{action:"revenge",target:btn.dataset.t});
+    if(r3&&r3.ok){toast("🗡 Отомстился!");if(typeof r3.coins==="number")S.coins=r3.coins;paint();await loadLeaderboard();}
+    else if(r3&&r3.error==="not enough coins"){toast("Не хватает монет 🪙");}
+    else{toast("Отомстить не вышло 😕");}
+   }catch(e){toast("Ошибка");}
+   btn.disabled=false;
+  };
+ });
 }
 $("lbShare").onclick=async function(){
  var b=this; b.disabled=true; b.textContent="Публикуем…";
