@@ -247,6 +247,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <button data-v="m3">🎄 Три в ряд</button>
   <button data-v="day">🏆 День</button>
   <button data-v="cards">🃏 Коллекция<span id="newBadge">NEW</span></button>
+  <button data-v="pet">🐾 Питомец</button>
   <button data-v="profile">👤 Профиль</button>
 </div>
 
@@ -338,6 +339,36 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
  <div class="card">
   <div style="font-weight:800;margin-bottom:8px">🎁 Как получить больше</div>
   <div class="small">Играй каждый день — карточка падает бесплатно. Серия квиза и уровень три-в-ряд поднимают твои очки в турнире.</div>
+ </div>
+</section>
+
+<!-- PET + DUEL -->
+<section class="view" id="v-pet">
+ <div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+   <div style="font-weight:800;font-size:15px" id="petTitle">🐾 Питомец</div>
+   <div style="font-size:13px;color:#9c7bff" id="petPower">сила 0</div>
+  </div>
+  <div id="petStage" style="text-align:center;font-size:12px;color:#9fb6d4;margin-bottom:6px">Яйцо</div>
+  <div style="text-align:center;font-size:64px;line-height:1.1" id="petEmoji">🥚</div>
+  <div id="petXpTxt" style="font-size:12px;color:#9fb6d4;text-align:center;margin:6px 0 10px">XP 0</div>
+  <div id="petBars"></div>
+  <div id="petActions" class="row" style="gap:6px;margin-top:10px;justify-content:center"></div>
+  <div id="petHint" class="small" style="text-align:center;margin-top:8px"></div>
+ </div>
+ <div class="card" style="margin-bottom:10px">
+  <div style="font-weight:800;margin-bottom:8px">⚔️ Дуэли — бой с «тенью»</div>
+  <div class="small" style="margin-bottom:8px">Сопернику не нужно быть онлайн: сервер помнит его прошлый результат. Ставка — билет конкурса, за победу — 2 билета.</div>
+  <div id="duelBox"><div class="small">Загрузка…</div></div>
+ </div>
+ <div id="duelBattle" style="display:none">
+  <div class="card">
+   <div style="font-weight:800;margin-bottom:8px" id="duelTitle">Бой</div>
+   <div id="duelQ"></div>
+   <div id="duelOpts"></div>
+   <div id="duelScore" style="font-size:13px;color:#9fb6d4;margin-top:8px"></div>
+   <button id="duelFinishBtn" style="width:100%;margin-top:10px;display:none">Завершить бой</button>
+  </div>
  </div>
 </section>
 
@@ -1579,6 +1610,170 @@ $("ts").textContent="v3.4";
  }
  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded",bind); else bind();
 })();
+
+/* ===== PET + DUEL ===== */
+let PET = null, DUEL = null, DUELQ = 0, DUELSCORE = 0, DUELTARGET = "", DUELQS = [];
+function petBar(label, val, color){
+ return '<div style="display:flex;align-items:center;gap:8px;margin:5px 0">'+
+  '<span style="font-size:12px;width:74px;color:#9fb6d4">'+label+'</span>'+
+  '<div style="flex:1;height:8px;background:#251a3d;border-radius:6px;overflow:hidden">'+
+  '<i style="display:block;height:100%;width:'+Math.max(0,Math.min(100,val))+'%;background:'+color+'"></i></div>'+
+  '<b style="font-size:11px;width:30px;text-align:right">'+Math.round(val)+'</b></div>';
+}
+async function initPet(){
+ try{
+  const j = await api2("/api/pet", {action:"state"});
+  if(!j||!j.pet){ document.getElementById("petTitle").textContent="🐾 Питомец (только в Telegram)"; return; }
+  PET = j.pet; renderPet();
+  loadDuelTargets();
+ }catch(e){}
+}
+function renderPet(){
+ if(!PET) return;
+ const t = document.getElementById("petTitle"), st = document.getElementById("petStage"),
+       em = document.getElementById("petEmoji"), xp = document.getElementById("petXpTxt"),
+       pw = document.getElementById("petPower");
+ if(!PET.hatched){
+   t.textContent = "🥚 Яйцо";
+   st.textContent = "Покрути яйцо "+PET.hatch+"/"+PET.need_hatch;
+   em.textContent = "🥚"; em.style.cursor = "pointer";
+   em.onclick = hatchPet;
+   xp.textContent = "Тапни по яйцу, чтобы вылупиться";
+   pw.textContent = "сила 0";
+   document.getElementById("petBars").innerHTML = "";
+   document.getElementById("petActions").innerHTML = "";
+   document.getElementById("petHint").textContent = "Вид выпадает случайно: Кот, Лис, Дракон или Орёл.";
+   return;
+ }
+ em.style.cursor = "default"; em.onclick = null;
+ const sp = PET.species || {name:"?", emoji:"🥚"};
+ t.textContent = sp.emoji + " " + sp.name;
+ st.textContent = "Стадия: " + PET.stage_name + " · щитов: " + PET.shields;
+ em.textContent = PET.stage_emoji;
+ const nx = PET.next_xp;
+ xp.textContent = "XP "+PET.xp+(nx?(" / "+nx):" — максимум");
+ pw.textContent = "сила " + PET.power;
+ document.getElementById("petBars").innerHTML =
+   petBar("\U0001F34E Голод", PET.hunger, "#ff8a5b")+
+   petBar("\U0001F3AE Радость", PET.happiness, "#ffd76a")+
+   petBar("\U0001F9FC Чистота", PET.hygiene, "#7cc7ff")+
+   petBar("\U0001F319 Энергия", PET.energy, "#b78bff");
+ let html = "";
+ const A = PET.actions || {};
+ for(const k in A){
+   const a = A[k];
+   const cdLeft = Math.max(0, (PET.cd && PET.cd[k] ? PET.now - PET.cd[k] : 99999) - 1800);
+   const dis = cdLeft > 0 ? "disabled" : "";
+   const lab = cdLeft > 0 ? Math.ceil(cdLeft/60)+"м" : (a.cost ? a.cost+" 🪙" : "0");
+   html += '<button '+(dis?"disabled":"")+' data-pet="'+k+'" style="flex:1;min-width:82px">'+
+           a.emoji+" "+a.name+'<span style="display:block;font-size:10px;opacity:.7">'+lab+'</span></button>';
+ }
+ const box = document.getElementById("petActions");
+ box.innerHTML = html;
+ box.querySelectorAll("button[data-pet]").forEach(b=>{
+   b.onclick = ()=>petCare(b.dataset.pet);
+ });
+ document.getElementById("petHint").textContent = "XP капает от квиза, три-в-ряд и дня в игре. Щит спасает билеты в проигранном бою.";
+}
+async function hatchPet(){
+ const j = await api2("/api/pet", {action:"hatch"});
+ if(!j||!j.pet) return;
+ if(j.hatched){
+   PET = j.pet; renderPet();
+   banner("\U0001F95A " + (j.species?j.species.name:"") + " вылупился!");
+   try{tg.HapticFeedback.notificationOccurred("success");}catch(e){}
+   if(j.coins!=null) S.coins=j.coins;
+   paint();
+ } else { PET = j.pet; renderPet(); }
+}
+async function petCare(kind){
+ const j = await api2("/api/pet", {action:"care", kind:kind});
+ if(!j){ banner("Ошибка"); return; }
+ if(j.error==="not enough coins"){ banner("Мало монет"); return; }
+ if(j.error==="cooldown"){ banner("Питомец отдыхает"); return; }
+ if(j.pet) PET = j.pet;
+ if(typeof j.coins==="number"){ S.coins=j.coins; paint(); }
+ renderPet();
+}
+async function loadDuelTargets(){
+ const j = await api2("/api/duel", {action:"state"});
+ if(!j) return;
+ DUEL = j;
+ const box = document.getElementById("duelBox");
+ let html = '<div class="small" style="margin-bottom:6px">Билетов: <b>'+(j.tickets||0)+'</b> · боев сегодня: '+
+   (j.used||0)+"/"+(j.daily_limit||5)+' · ставка '+(j.cost||1)+'</div>';
+ const ts = j.targets || [];
+ if(!ts.length){ html += '<div class="small">Пока нет соперников. Сыграй в квиз — и ты появишься в списке.</div>'; }
+ else{
+   ts.forEach(t=>{
+     html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #2a1b3d">'+
+      '<div style="flex:1"><b>'+(t.name||"Игрок")+'</b><div style="font-size:11px;color:#9fb6d4">'+
+      'рекорд '+(t.best||0)+' · сила '+(t.power||0)+'</div></div>'+
+      '<button class="pri" data-duel="'+t.uid+'"'+( (j.tickets||0) < (j.cost||1) ? " disabled":"")+'>Бой</button></div>';
+   });
+ }
+ box.innerHTML = html;
+ box.querySelectorAll("button[data-duel]").forEach(b=>{ b.onclick = ()=>duelStart(b.dataset.duel); });
+}
+async function duelStart(uid){
+ const j = await api2("/api/duel", {action:"start", target:uid});
+ if(!j||!j.ok){
+   if(j&&j.error==="not enough tickets") banner("Нет билетов");
+   else if(j&&j.error==="cooldown") banner("Перезарядка " + Math.ceil((j.wait||0)/60) + " мин");
+   else if(j&&j.error==="daily limit") banner("Лимит боёв на сегодня");
+   else if(j&&j.error==="not hatched") banner("Сначала вылупи питомца");
+   else banner("Не вышло");
+   return;
+ }
+ const b = j.battle; DUELTARGET = uid; DUELQ = 0; DUELSCORE = 0; DUELQS = b.qs || [];
+ document.getElementById("duelBattle").style.display = "";
+ document.getElementById("duelTitle").textContent = "Бой: ты vs " + (b.target_name||"Тень");
+ duelNextQ(DUELQS);
+}
+function duelNextQ(qs){
+ const box = document.getElementById("duelOpts");
+ if(DUELQ >= qs.length){
+   document.getElementById("duelQ").textContent = "Все вопросы отвечены.";
+   box.innerHTML = "";
+   document.getElementById("duelFinishBtn").style.display = "";
+   document.getElementById("duelScore").textContent = "Твои очки: "+DUELSCORE;
+   return;
+ }
+ const q = qs[DUELQ];
+ document.getElementById("duelQ").textContent = q.q;
+ document.getElementById("duelScore").textContent = "Вопрос "+(DUELQ+1)+"/"+qs.length+" · очки "+DUELSCORE;
+ let h = "";
+ q.o.forEach((o,i)=>{ h += '<button data-ch="'+i+'" style="width:100%;margin:4px 0;text-align:left">'+o+'</button>'; });
+ box.innerHTML = h;
+ box.querySelectorAll("button[data-ch]").forEach(b=>{
+   b.onclick = ()=>duelAnswer(q.id, parseInt(b.dataset.ch,10), b);
+ });
+}
+async function duelAnswer(id, choice, btn){
+ const j = await api2("/api/duel", {action:"answer", target:DUELTARGET, id:id, choice:choice});
+ if(!j||!j.ok) return;
+ if(btn){ btn.style.background = j.correct ? "#1e6b3a" : "#6b1e2e"; }
+ if(j.correct) DUELSCORE = j.score;
+ setTimeout(()=>{ DUELQ++; duelNextQ(DUELQS); }, 700);
+}
+async function duelFinish(){
+ const j = await api2("/api/duel", {action:"finish", target:DUELTARGET});
+ if(!j||!j.ok){ banner("Бой не завершён"); return; }
+ const r = j.result;
+ if(typeof j.coins==="number"){ S.coins=j.coins; paint(); }
+ if(j.pet) PET = j.pet;
+ document.getElementById("duelBattle").style.display = "none";
+ document.getElementById("duelQ").textContent = "";
+ document.getElementById("duelOpts").innerHTML = "";
+ document.getElementById("duelFinishBtn").style.display = "none";
+ banner(r.win ? ("\U0001F3C6 Победа! +"+r.gained+" билета") : ("\U0001F64F Поражение"+(r.gained?(" · щит спас "+r.gained):"")));
+ renderPet(); loadDuelTargets();
+}
+document.getElementById("duelFinishBtn").onclick = duelFinish;
+document.querySelectorAll('.tabs button').forEach(function(b){
+ if(b.dataset.v === 'pet'){ b.addEventListener('click', function(){ initPet(); }); }
+});
+
 </script>
 </body>
 </html>

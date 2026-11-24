@@ -920,6 +920,7 @@ async def api_answer(request):
         acc["streak"] += 1
         tourney_add(d, acc, 10)
         contest_add_points(d, acc, "quiz", 10); bp_add_points(d, acc, "quiz")
+        pet_add_xp(d, acc, "quiz")
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
         if not chal.get("done"):
             chal["done"] = 1
@@ -1048,6 +1049,16 @@ async def api_m3(request):
         m["garland"] = max(int(m.get("garland", 0)), garland)
         m["lamps"] = max(int(m.get("lamps", 0)), lamps)
         m["maxcombo"] = max(int(m.get("maxcombo", 0)), maxcombo)
+        # Жизни списывает сервер. Раньше клиент уменьшал их только у себя,
+        # а сервер о жизни не знал — из-за этого жизни обходились бесплатно.
+        prev_plays = int(m.get("plays_last", m.get("plays", 0)))
+        spent = max(0, int(plays) - prev_plays)
+        if spent > 0:
+            regen_lives(acc)
+            for _ in range(min(spent, 9)):
+                if int(acc.get("lives", 5)) > 0:
+                    acc["lives"] = int(acc["lives"]) - 1
+        m["plays_last"] = int(plays)
         m["plays"] = max(int(m.get("plays", 0)), plays)
 
         # Уровень засчитывается сервером: только если хватает очков.
@@ -1060,6 +1071,7 @@ async def api_m3(request):
             m["best"] = max(int(m.get("best", 0)), score)
             tourney_add(d, acc, max(0, score) // 10)
             contest_add_points(d, acc, "m3", 5); bp_add_points(d, acc, "m3")
+            pet_add_xp(d, acc, "m3")
             m["lvl"] = cur + 1
             m["score"] = 0
             m["moves"] = M3_MAX_MOVES
@@ -1629,6 +1641,7 @@ async def api_visit(request):
     is_new, reward, streak, penalty = register_visit(acc)
     if is_new:
         contest_add_points(d, acc, "day", 20); bp_add_points(d, acc, "day")
+        pet_add_xp(d, acc, "day")
     save_store(d)
     return web.json_response({"ok": True, "new_day": is_new, "reward": reward,
                               "streak": streak, "penalty": penalty,
@@ -2483,6 +2496,469 @@ async def on_error(event: ErrorEvent):
     """Любая ошибка хендлера не должна ронять polling-цикл."""
     logging.error("handler error: %s", event.exception, exc_info=event.exception)
 
+# ---------------- ПИТОЕЦ: тамагочи, хранитель билетов и сил ----------------
+# Питомец растёт от активности в игре, сам проводит дуэли и держит щит.
+PET_SPECIES = [
+    {"id": "cat",    "name": "Кот",     "emoji": "\U0001F431", "rar": "common", "pow": 1},
+    {"id": "fox",    "name": "Лис",     "emoji": "\U0001F98A", "rar": "rare",   "pow": 2},
+    {"id": "dragon", "name": "Дракон",  "emoji": "\U0001F409", "rar": "epic",   "pow": 3},
+    {"id": "eagle",  "name": "Орёл",    "emoji": "\U0001F985", "rar": "legend", "pow": 4},
+]
+PET_STAGES = [
+    {"n": 1, "name": "Яйцо",         "emoji": "\U0001F95A", "xp": 0},
+    {"n": 2, "name": "Малыш",        "emoji": "\U0001F424", "xp": 60},
+    {"n": 3, "name": "Друг",         "emoji": "\U0001F425", "xp": 200},
+    {"n": 4, "name": "Хранитель",    "emoji": "\U0001F9D9", "xp": 600},
+    {"n": 5, "name": "Легенда",      "emoji": "\U0001F985", "xp": 1500},
+]
+PET_XP = {"quiz": 12, "m3": 30, "day": 15, "duel": 20}
+PET_DECAY_HOUR = 5
+PET_ACTION_GAIN = 40
+PET_HATCH_TAPS = 5
+PET_ACTIONS = {
+    "feed":  {"cost": 10, "need": "hunger",    "emoji": "\U0001F34E", "name": "Кормить"},
+    "play":  {"cost": 15, "need": "happiness", "emoji": "\U0001F3AE", "name": "Играть"},
+    "wash":  {"cost": 15, "need": "hygiene",   "emoji": "\U0001F9FC", "name": "Мыть"},
+    "sleep": {"cost": 0,  "need": "energy",    "emoji": "\U0001F319", "name": "Спать"},
+}
+PET_ACTION_CD = 1800
+
+
+def pet_acc(acc):
+    """Состояние питомца игрока."""
+    p = acc.setdefault("pet", {})
+    p.setdefault("hatch", 0)
+    p.setdefault("stage", 1)
+    p.setdefault("xp", 0)
+    p.setdefault("species", "")
+    p.setdefault("hunger", 70)
+    p.setdefault("happiness", 70)
+    p.setdefault("hygiene", 70)
+    p.setdefault("energy", 70)
+    p.setdefault("ts", int(time.time()))
+    p.setdefault("cd", {})
+    p.setdefault("shields", 1)
+    return p
+
+
+def pet_decay(p):
+    """Потребности падают по времени (5 единиц в час)."""
+    now = int(time.time())
+    last = int(p.get("ts") or now)
+    hours = (now - last) // 3600
+    if hours > 0:
+        for k in ("hunger", "happiness", "hygiene", "energy"):
+            p[k] = max(0, int(p.get(k, 70)) - hours * PET_DECAY_HOUR)
+        p["ts"] = last + hours * 3600
+    else:
+        p["ts"] = now
+    return p
+
+
+def pet_stage_for(xp):
+    st = 1
+    for i, s in enumerate(PET_STAGES):
+        if xp >= s["xp"]:
+            st = i + 1
+    return st
+
+
+def pet_power(p):
+    """Боевая сила питомца: вид + стадия."""
+    base = 1
+    for s in PET_SPECIES:
+        if s["id"] == p.get("species"):
+            base = int(s["pow"])
+    st = pet_stage_for(int(p.get("xp", 0)))
+    return base * 5 + st * 3
+
+
+def pet_view(acc):
+    p = pet_acc(acc)
+    pet_decay(p)
+    stage = pet_stage_for(int(p.get("xp", 0)))
+    p["stage"] = stage
+    sp = None
+    for s in PET_SPECIES:
+        if s["id"] == p.get("species"):
+            sp = s
+    nxt = PET_STAGES[stage]["xp"] if stage < len(PET_STAGES) else None
+    return {"stage": stage,
+            "stage_name": PET_STAGES[stage - 1]["name"],
+            "stage_emoji": PET_STAGES[stage - 1]["emoji"],
+            "xp": int(p.get("xp", 0)),
+            "next_xp": nxt,
+            "hatched": bool(p.get("species")),
+            "hatch": int(p.get("hatch", 0)),
+            "need_hatch": PET_HATCH_TAPS,
+            "species": sp,
+            "hunger": int(p.get("hunger", 70)),
+            "happiness": int(p.get("happiness", 70)),
+            "hygiene": int(p.get("hygiene", 70)),
+            "energy": int(p.get("energy", 70)),
+            "shields": int(p.get("shields", 1)),
+            "power": pet_power(p),
+            "cd": p.get("cd", {}),
+            "actions": PET_ACTIONS,
+            "now": int(time.time())}
+
+
+def pet_add_xp(d, acc, kind, amount=None):
+    """Начислить питомцу опыт. Возвращает номер новой стадии, если вырос."""
+    pts = amount if amount is not None else PET_XP.get(kind, 0)
+    if pts <= 0:
+        return 0
+    p = pet_acc(acc)
+    if not p.get("species"):
+        return 0
+    old = pet_stage_for(int(p.get("xp", 0)))
+    p["xp"] = int(p.get("xp", 0)) + int(pts)
+    new = pet_stage_for(int(p["xp"]))
+    if new > old:
+        p["stage"] = new
+        p["shields"] = int(p.get("shields", 1)) + 1
+        return new
+    return 0
+
+
+def _pet_roll_species():
+    r = random.random()
+    if r < 0.60:
+        rar = "common"
+    elif r < 0.85:
+        rar = "rare"
+    elif r < 0.97:
+        rar = "epic"
+    else:
+        rar = "legend"
+    for s in PET_SPECIES:
+        if s["rar"] == rar:
+            return s
+    return PET_SPECIES[0]
+
+
+async def api_pet(request):
+    """Питомец: состояние, вылупление, уход (кормление/игра/мытьё/сон)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    action = str(body.get("action", "state"))
+
+    d = load_store(); acc = acc_of(d, uid)
+    p = pet_acc(acc); pet_decay(p)
+
+    if action == "hatch":
+        if p.get("species"):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "already hatched",
+                                      "pet": pet_view(acc)})
+        p["hatch"] = int(p.get("hatch", 0)) + 1
+        if p["hatch"] >= PET_HATCH_TAPS:
+            sp = _pet_roll_species()
+            p["species"] = sp["id"]
+            p["stage"] = 1
+            p["xp"] = 0
+            save_store(d)
+            return web.json_response({"ok": True, "hatched": True, "species": sp,
+                                      "pet": pet_view(acc), **wallet_view(acc)})
+        save_store(d)
+        return web.json_response({"ok": True, "hatched": False,
+                                  "pet": pet_view(acc)})
+
+    if action == "care":
+        key = str(body.get("kind", ""))
+        a = PET_ACTIONS.get(key)
+        if not a:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "bad action",
+                                      "pet": pet_view(acc)})
+        if not p.get("species"):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not hatched",
+                                      "pet": pet_view(acc)})
+        now = int(time.time())
+        last = int((p.get("cd", {}) or {}).get(key, 0))
+        if now - last < PET_ACTION_CD:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "cooldown",
+                                      "wait": PET_ACTION_CD - (now - last),
+                                      "pet": pet_view(acc)})
+        cost = int(a["cost"])
+        if cost and acc["coins"] < cost:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not enough coins",
+                                      **wallet_view(acc), "pet": pet_view(acc)})
+        if cost:
+            acc["coins"] -= cost
+        need = a["need"]
+        p[need] = min(100, int(p.get(need, 70)) + PET_ACTION_GAIN)
+        p.setdefault("cd", {})[key] = now
+        pet_add_xp(d, acc, "care", 5)
+        save_store(d)
+        return web.json_response({"ok": True, "kind": key, "need": need,
+                                  **wallet_view(acc), "pet": pet_view(acc)})
+
+    save_store(d)
+    return web.json_response({"ok": True, "pet": pet_view(acc), **wallet_view(acc)})
+
+
+# ---------------- АСИНХРОННАЯ ДУЭЛЬ: бой против «тени» ----------------
+# Оба соперника НЕ должны быть онлайн одновременно. Сервер хранит последний
+# результат игрока («тень»): атакующий играет раунд на сервере, сервер
+# сравнивает с сохранённым результатом жертвы.
+DUEL_TICKETS = 1          # сколько билетов ставится в бой
+DUEL_WIN_TICKETS = 2      # сколько билетов забирает победитель
+DUEL_COOLDOWN = 600       # 10 минут между боями с одной жертвой
+DUEL_DAILY_LIMIT = 5      # не больше 5 боёв в сутки
+DUEL_QUESTIONS = 5        # вопросов в бою
+
+
+def duel_shadow(d, uid):
+    """«Тень» игрока: его последний результат в квизе + сила питомца."""
+    a = d.get(str(uid))
+    if not isinstance(a, dict):
+        return None
+    best = int(a.get("quiz_best", 0) or 0)
+    streak = int(a.get("quiz_streak", 0) or 0)
+    p = a.get("pet") or {}
+    power = 0
+    if p.get("species"):
+        power = pet_power(p)
+    return {"uid": str(uid),
+            "name": a.get("name") or "Игрок",
+            "best": best,
+            "streak": streak,
+            "power": power,
+            "shadow": True}
+
+
+def duel_acc(acc):
+    """Состояние дуэлей игрока: счётчики и последние бои."""
+    x = acc.setdefault("duel", {"day": "", "count": 0, "log": []})
+    today = today_key()
+    if x.get("day") != today:
+        x["day"] = today
+        x["count"] = 0
+    x.setdefault("count", 0)
+    x.setdefault("log", [])
+    if len(x["log"]) > 30:
+        del x["log"][:-30]
+    return x
+
+
+def _duel_questions():
+    """Набор вопросов для боя (серверная проверка ответов)."""
+    idx = random.sample(range(len(QUIZ_BANK)), min(DUEL_QUESTIONS, len(QUIZ_BANK)))
+    return [{"id": i, "q": QUIZ_BANK[i]["q"], "o": QUIZ_BANK[i]["o"]} for i in idx]
+
+
+def duel_targets(d, uid):
+    """Список соперников: другие игроки с «тенью» (не сам и не пустые)."""
+    rows = []
+    for k, a in d.items():
+        if not k.isdigit() or k == str(uid) or not isinstance(a, dict):
+            continue
+        sh = duel_shadow(d, k)
+        if not sh:
+            continue
+        if not sh["best"] and not sh["power"]:
+            continue
+        rows.append(sh)
+    rows.sort(key=lambda r: (-(r["best"] + r["power"] * 5), r["name"]))
+    return rows[:20]
+
+
+async def api_duel(request):
+    """Дуэль: подготовка боя, ответы и разбор. Всё считает сервер."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    action = str(body.get("action", "state"))
+
+    d = load_store(); acc = acc_of(d, uid)
+    x = duel_acc(acc)
+    p = pet_acc(acc); pet_decay(p)
+
+    if action == "state":
+        save_store(d)
+        return web.json_response({"ok": True, "targets": duel_targets(d, uid),
+                                  "tickets": _duel_ticket_count(acc),
+                                  "cost": DUEL_TICKETS,
+                                  "cooldown": DUEL_COOLDOWN,
+                                  "daily_limit": DUEL_DAILY_LIMIT,
+                                  "used": int(x.get("count", 0)),
+                                  "pet": pet_view(acc),
+                                  "log": x.get("log", [])[-10:]})
+
+    if action == "start":
+        target = str(body.get("target", "")).strip()
+        if not target or target == str(uid):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "bad target"})
+        sh = duel_shadow(d, target)
+        if not sh:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "player not found"})
+        if not p.get("species"):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not hatched",
+                                      "msg": "Сначала вылупи питомца"})
+        if int(x.get("count", 0)) >= DUEL_DAILY_LIMIT:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "daily limit"})
+        # кулдаун между боями с одной жертвой
+        for e in x.get("log", []):
+            if e.get("target") == target and e.get("day") == today_key():
+                left = DUEL_COOLDOWN - (int(time.time()) - int(e.get("ts", 0)))
+                if left > 0:
+                    save_store(d)
+                    return web.json_response({"ok": False, "error": "cooldown",
+                                              "wait": left})
+        if _duel_ticket_count(acc) < DUEL_TICKETS:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not enough tickets",
+                                      "tickets": _duel_ticket_count(acc)})
+        _duel_spend_ticket(acc)
+        x["count"] = int(x.get("count", 0)) + 1
+        battle = {"target": target, "target_name": sh["name"],
+                  "shadow_best": sh["best"], "shadow_power": sh["power"],
+                  "qs": _duel_questions(), "answers": [], "score": 0,
+                  "power": pet_power(p), "ts": int(time.time()),
+                  "day": today_key()}
+        x.setdefault("battle", {})[target] = battle
+        save_store(d)
+        return web.json_response({"ok": True, "battle": battle,
+                                  "tickets": _duel_ticket_count(acc),
+                                  "pet": pet_view(acc)})
+
+    if action == "answer":
+        target = str(body.get("target", "")).strip()
+        battle = (x.get("battle") or {}).get(target)
+        if not battle:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "no battle"})
+        try:
+            qid = int(body.get("id", -1))
+            chosen = int(body.get("choice", -1))
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad params"}, status=400)
+        done = {int(a.get("id")) for a in battle.get("answers", [])}
+        if qid in done:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "already answered"})
+        if qid < 0 or qid >= len(QUIZ_BANK):
+            return web.json_response({"ok": False, "error": "bad question"}, status=400)
+        q = QUIZ_BANK[qid]
+        if chosen < 0 or chosen >= len(q["o"]):
+            return web.json_response({"ok": False, "error": "bad choice"}, status=400)
+        good = (chosen == q["c"])
+        battle.setdefault("answers", []).append({"id": qid, "good": good})
+        if good:
+            battle["score"] = int(battle.get("score", 0)) + 10
+        save_store(d)
+        return web.json_response({"ok": True, "correct": good,
+                                  "answer": q["o"][q["c"]], "hint": q["h"],
+                                  "score": battle["score"],
+                                  "left": len(battle.get("answers", []))})
+
+    if action == "finish":
+        target = str(body.get("target", "")).strip()
+        battle = (x.get("battle") or {}).get(target)
+        if not battle:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "no battle"})
+        score = int(battle.get("score", 0))
+        shadow_best = int(battle.get("shadow_best", 0))
+        my_power = int(battle.get("power", 0))
+        sh_power = int(battle.get("shadow_power", 0))
+        # Победа: набрали не меньше «тени» И сила питомца не ниже.
+        win = score >= shadow_best and my_power >= sh_power
+        gained = 0
+        lost = 0
+        if win:
+            gained = DUEL_WIN_TICKETS
+            _duel_add_ticket(acc, DUEL_WIN_TICKETS)
+            acc["coins"] += 40
+            pet_add_xp(d, acc, "duel")
+        else:
+            lost = DUEL_TICKETS
+            _duel_spend_ticket(acc)
+            # Щит питомца полностью компенсирует проигранные билеты
+            if int(p.get("shields", 0)) > 0:
+                p["shields"] = int(p["shields"]) - 1
+                gained = DUEL_TICKETS
+                _duel_add_ticket(acc, DUEL_TICKETS)
+        entry = {"target": target, "target_name": battle.get("target_name"),
+                 "win": win, "score": score, "shadow_best": shadow_best,
+                 "power": my_power, "shadow_power": sh_power,
+                 "gained": gained, "lost": lost,
+                 "ts": int(time.time()), "day": today_key()}
+        x.setdefault("log", []).append(entry)
+        if len(x["log"]) > 30:
+            del x["log"][:-30]
+        (x.get("battle") or {}).pop(target, None)
+        save_store(d)
+        return web.json_response({"ok": True, "result": entry,
+                                  "tickets": _duel_ticket_count(acc),
+                                  "pet": pet_view(acc), **wallet_view(acc)})
+
+    save_store(d)
+    return web.json_response({"ok": False, "error": "unknown action"})
+
+
+def _duel_ticket_count(acc):
+    """Сколько боевых билетов у игрока (общие билеты конкурса)."""
+    c = contest_tickets(acc)
+    tiers = c.get("tiers") or {}
+    total = 0
+    for row in tiers.values():
+        total += int(row.get("tickets", 0) or 0) + int(row.get("paid_tickets", 0) or 0)
+    return total
+
+
+def _duel_spend_ticket(acc):
+    """Списать боевой билет: сначала бесплатные, потом платные."""
+    c = contest_tickets(acc)
+    tiers = c.get("tiers") or {}
+    for row in tiers.values():
+        n = int(row.get("tickets", 0) or 0)
+        if n > 0:
+            row["tickets"] = n - 1
+            return True
+    for row in tiers.values():
+        n = int(row.get("paid_tickets", 0) or 0)
+        if n > 0:
+            row["paid_tickets"] = n - 1
+            return True
+    return False
+
+
+def _duel_add_ticket(acc, n=1):
+    """Начислить боевой билет в активную ступень конкурса."""
+    tier = active_tier(acc)
+    if not tier:
+        return False
+    c = contest_tickets(acc)
+    row = (c.get("tiers") or {}).setdefault(
+        tier["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
+    row["tickets"] = int(row.get("tickets", 0) or 0) + int(n)
+    return True
+
+
 def build_app(include_webhook=False):
     """Единая регистрация маршрутов для обоих режимов (polling и webhook).
 
@@ -2533,6 +3009,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/contest/buy", api_contest_buy)
     app.router.add_post("/api/bp", api_bp)
     app.router.add_post("/api/bp/claim", api_bp_claim)
+    app.router.add_post("/api/pet", api_pet)
+    app.router.add_post("/api/duel", api_duel)
 
     @web.middleware
     async def cors_mw(request, handler):
