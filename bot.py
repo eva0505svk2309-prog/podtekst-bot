@@ -709,7 +709,8 @@ def register_visit(acc):
     return True, reward, streak, penalty
 
 LIFE_REGEN_SEC = 1800
-ANSWER_COOLDOWN = 3600  # один и тот же вопрос — раз в час  # одна жизнь каждые 30 минут
+ANSWER_COOLDOWN = 3600  # один и тот же вопрос — раз в час
+ANSWER_MAX_ATTEMPTS = 3  # попыток на вопрос в пределах часа  # одна жизнь каждые 30 минут
 
 def regen_lives(acc):
     """Жизни восстанавливаются по времени, максимум 9."""
@@ -889,21 +890,30 @@ async def api_answer(request):
 
     d = load_store(); acc = acc_of(d, uid)
 
-    # Защита от повторной отправки ответа: один и тот же вопрос можно
-    # засчитать только раз в час, иначе монеты фармятся перезапросом.
+    # Защита от фарма перезапросом: один и тот же вопрос можно ЗАСЧИТАТЬ
+    # (получить награду) только раз в час. Но ошибочный ответ не должен
+    # сжигать вопрос на час — иначе игрок ошибся и до конца часа не может
+    # исправиться, а серия обнуляется. Поэтому внутри часа разрешено до
+    # ANSWER_MAX_ATTEMPTS попыток; после них вопрос блокируется до
+    # истечения часа.
     answered = acc.setdefault("answered", {})
-    last = answered.get(str(idx))
     now_ts = int(time.time())
-    if last and (now_ts - int(last)) < ANSWER_COOLDOWN:
-        # Повторный ответ на тот же вопрос — это НЕ поломка. Клиент раньше
-        # показывал «Ошибка проверки ответа», потому что любой error читался
-        # как сбой. Теперь отдаём явный флаг и правильный ответ.
-        return web.json_response({"ok": True, "already_answered": True,
-                                  "correct": chosen == q["c"], "answer": q["o"][q["c"]],
-                                  "hint": q["h"], **wallet_view(acc)})
-    answered[str(idx)] = now_ts
+    rec = answered.get(str(idx)) or {}
+    if isinstance(rec, int):          # старый формат: только метка времени
+        rec = {"t": rec, "n": ANSWER_MAX_ATTEMPTS}
+    rec = {"t": int(rec.get("t", 0)), "n": int(rec.get("n", 0))}
+    if rec["t"] and (now_ts - rec["t"]) < ANSWER_COOLDOWN:
+        if rec["n"] >= ANSWER_MAX_ATTEMPTS:
+            # Всё, попытки исчерпаны — отдаём явный флаг и правильный ответ.
+            return web.json_response({"ok": True, "already_answered": True,
+                                      "correct": chosen == q["c"], "answer": q["o"][q["c"]],
+                                      "hint": q["h"], **wallet_view(acc)})
+    else:
+        rec = {"t": now_ts, "n": 0}
+    rec["n"] += 1
+    answered[str(idx)] = rec
     if len(answered) > 200:
-        for k in sorted(answered, key=lambda x: answered[x])[:100]:
+        for k in sorted(answered, key=lambda x: (answered[x] or {}).get("t", 0))[:100]:
             answered.pop(k, None)
 
     # Челлендж дня засчитывается один раз в сутки
@@ -2899,9 +2909,10 @@ async def api_duel(request):
             acc["coins"] += 40
             pet_add_xp(d, acc, "duel")
         else:
+            # Билет уже списан на старте боя (_duel_spend_ticket в action="start"),
+            # повторно списывать нельзя — иначе поражение стоит два билета.
             lost = DUEL_TICKETS
-            _duel_spend_ticket(acc)
-            # Щит питомца полностью компенсирует проигранные билеты
+            # Щит питомца полностью компенсирует проигранный билет
             if int(p.get("shields", 0)) > 0:
                 p["shields"] = int(p["shields"]) - 1
                 gained = DUEL_TICKETS
@@ -2952,12 +2963,26 @@ def _duel_spend_ticket(acc):
 
 
 def _duel_add_ticket(acc, n=1):
-    """Начислить боевой билет в активную ступень конкурса."""
+    """Начислить боевой билет.
+
+    Раньше билеты капали только в АКТИВНУЮ ступень конкурса. Если ступень
+    ещё не открыта (t1 требует match-3 ур.2 + серию из 3 квизов), выигранные
+    в дуэли билеты просто исчезали. Теперь начисляем в активную ступень, а
+    если её нет — в ступень с наименьшим числом билетов, иначе — в t1.
+    """
+    c = contest_tickets(acc)
+    tiers = c.get("tiers") or {}
     tier = active_tier(acc)
     if not tier:
-        return False
-    c = contest_tickets(acc)
-    row = (c.get("tiers") or {}).setdefault(
+        if not tiers:
+            tiers["t1"] = {"points": 0, "paid_tickets": 0, "tickets": 0}
+            tier = {"id": "t1"}
+        else:
+            tid = min(tiers.items(),
+                      key=lambda kv: int(kv[1].get("tickets", 0) or 0)
+                      + int(kv[1].get("paid_tickets", 0) or 0))[0]
+            tier = {"id": tid}
+    row = tiers.setdefault(
         tier["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
     row["tickets"] = int(row.get("tickets", 0) or 0) + int(n)
     return True
