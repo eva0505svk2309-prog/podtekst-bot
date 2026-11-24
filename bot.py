@@ -586,7 +586,11 @@ def acc_of(d, uid):
     acc.setdefault("streak", 0); acc.setdefault("best", 0); acc.setdefault("level", 1)
     acc.setdefault("charges", [])
     acc.setdefault("invited", 0)
-    acc.setdefault("lives_ts", 0)
+    # ВАЖНО: если отметки регенерации не было, выставляем текущее время.
+    # Раньше стоял 0, и regen_lives сразу начислял 9 жизней — урон от атак
+    # не держался вообще.
+    if not acc.get("lives_ts"):
+        acc["lives_ts"] = int(time.time())
     acc.setdefault("m3", {"lvl": 1, "score": 0, "moves": 20, "best": 0,
                           "plays": 0, "garland": 0, "combo": 0,
                           "maxcombo": 0, "total": 0, "cleared": 0})
