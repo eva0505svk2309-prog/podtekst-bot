@@ -1451,16 +1451,28 @@ async def api_attack(request):
 
     if action == "revenge":
         # Отомстить можно только тому, кто на тебя напал.
-        pend = [x for x in log if x.get("target") == str(uid) and not x.get("answered")]
+        pend = [x for x in log
+                if x.get("target") == str(uid)
+                and x.get("attacker") == target
+                and not x.get("answered")]
         if not pend:
             save_store(d)
             return web.json_response({"ok": False, "error": "no revenge available"})
+        pair = sum(1 for x in log
+                   if (x.get("attacker") == str(uid) and x.get("target") == target)
+                   or (x.get("attacker") == target and x.get("target") == str(uid)))
+        if pair >= 6:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "duel limit reached"})
         pend[-1]["answered"] = True
         # Мститель платит те же монеты.
         if acc["coins"] < ATTACK_COST:
             save_store(d)
             return web.json_response({"ok": False, "error": "not enough coins",
                                       **wallet_view(acc)})
+        if int(tacc.get("lives", 5)) <= 0:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "target is out of lives"})
         acc["coins"] -= ATTACK_COST
         tacc["lives"] = max(0, int(tacc.get("lives", 5)) - 1)
         log.append({"attacker": str(uid), "target": target,
@@ -1476,6 +1488,9 @@ async def api_attack(request):
         save_store(d)
         return web.json_response({"ok": False, "error": "not enough coins",
                                   **wallet_view(acc)})
+    if int(tacc.get("lives", 5)) <= 0:
+        save_store(d)
+        return web.json_response({"ok": False, "error": "target is out of lives"})
     mine = acc.setdefault("attacks", [])
     for a in mine:
         if a.get("uid") == target and time.time() - int(a.get("ts", 0)) < ATTACK_COOLDOWN:
