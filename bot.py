@@ -1307,6 +1307,12 @@ async def api_promo_stats(request):
                               "visits_by_source": p.get("visits_by_source", {}) or {}})
 
 
+def _lb_name(d, uid):
+    acc = d.get(str(uid)) or {}
+    nm = acc.get("name") or ""
+    return str(nm)[:28] if nm else f"Игрок {str(uid)[-4:]}"
+
+
 def _lb_rows(d, limit=20):
     """Собираем топ игроков по сумме очков: квиз-серия + уровень три-в-ряд + уровень."""
     rows = []
@@ -1407,6 +1413,88 @@ async def api_channel_sub(request):
                               **wallet_view(acc)})
 
 
+# ---------------- АТАКА / МЕСТЬ ----------------
+ATTACK_COST = 50        # монет за нападение
+ATTACK_COOLDOWN = 600   # секунд между нападениями на одного игрока
+
+
+async def api_attack(request):
+    """Нападение на соперника из таблицы лидеров. Жертва может отомстить.
+
+    Клиент может только тратить свои монеты и выбирать цель по uid.
+    Урон и начисление — только здесь, на сервере.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+
+    action = body.get("action", "attack")
+    target = str(body.get("target", "")).strip()
+    if not target or target == str(uid):
+        return web.json_response({"ok": False, "error": "bad target"}, status=400)
+
+    d = load_store()
+    acc = acc_of(d, uid)
+    tacc = d.get(target)
+    if not isinstance(tacc, dict):
+        save_store(d)
+        return web.json_response({"ok": False, "error": "player not found"})
+
+    log = d.setdefault("_attacks", [])
+
+    if action == "revenge":
+        # Отомстить можно только тому, кто на тебя напал.
+        pend = [x for x in log if x.get("target") == str(uid) and not x.get("answered")]
+        if not pend:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "no revenge available"})
+        pend[-1]["answered"] = True
+        # Мститель платит те же монеты.
+        if acc["coins"] < ATTACK_COST:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not enough coins",
+                                      **wallet_view(acc)})
+        acc["coins"] -= ATTACK_COST
+        tacc["lives"] = max(0, int(tacc.get("lives", 5)) - 1)
+        log.append({"attacker": str(uid), "target": target,
+                    "ts": int(time.time()), "revenge": True})
+        del log[:-200]
+        save_store(d)
+        return web.json_response({"ok": True, "revenge": True,
+                                  "target_lives": tacc.get("lives", 5),
+                                  **wallet_view(acc)})
+
+    # Обычное нападение.
+    if acc["coins"] < ATTACK_COST:
+        save_store(d)
+        return web.json_response({"ok": False, "error": "not enough coins",
+                                  **wallet_view(acc)})
+    mine = acc.setdefault("attacks", [])
+    for a in mine:
+        if a.get("uid") == target and time.time() - int(a.get("ts", 0)) < ATTACK_COOLDOWN:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "cooldown",
+                                      **wallet_view(acc)})
+
+    acc["coins"] -= ATTACK_COST
+    mine.append({"uid": target, "ts": int(time.time())})
+    del mine[:-50]
+    tacc["lives"] = max(0, int(tacc.get("lives", 5)) - 1)
+    log.append({"attacker": str(uid), "target": target,
+                "ts": int(time.time()), "revenge": False})
+    del log[:-200]
+    save_store(d)
+    return web.json_response({"ok": True, "target_lives": tacc.get("lives", 5),
+                              **wallet_view(acc)})
+
+
 async def api_leaderboard(request):
     """Топ игроков — конкуренция и повод вернуться в игру."""
     try:
@@ -1434,7 +1522,16 @@ async def api_leaderboard(request):
                 "level": int(acc.get("level", 1) or 1),
                 "m3lvl": int((acc.get("m3", {}) or {}).get("lvl", 1) or 1),
                 "days": len(acc.get("days", {}) or {}), "place": None}
+    log = d.get("_attacks", []) or []
+    my_rev = []
+    for x in log:
+        if x.get("target") == str(uid) and not x.get("answered"):
+            my_rev.append({"uid": x.get("attacker"), "name": _lb_name(d, x.get("attacker"))})
+    for i, r in enumerate(rows):
+        r["can_attack"] = (r["uid"] != str(uid))
     return web.json_response({"ok": True, "top": rows, "me": mine,
+                              "revenge": my_rev[-5:],
+                              "attack_cost": ATTACK_COST,
                               "total": max(1, len(rows))})
 
 
@@ -2407,6 +2504,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/return", api_promo_return)
     app.router.add_post("/api/ads/stats", api_ads_stats)
     app.router.add_post("/api/leaderboard", api_leaderboard)
+    app.router.add_post("/api/attack", api_attack)
     app.router.add_post("/api/share/score", api_share_score)
     app.router.add_post("/api/channel/sub", api_channel_sub)
     app.router.add_post("/api/ad/reward", api_ad_reward)
