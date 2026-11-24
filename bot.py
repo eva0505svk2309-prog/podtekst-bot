@@ -1977,7 +1977,7 @@ def tier_unlocked(acc, tier):
     if prev:
         pt = tier_by_id(prev)
         if pt:
-            st = contest_tiers(acc)
+            st = contest_tickets(acc)
             # предыдущая ступень должна быть не просто открыта, а пройдена (есть билет)
             if int(st["tiers"].get(prev, {}).get("tickets", 0)) <= 0:
                 return False
@@ -2555,11 +2555,15 @@ def pet_decay(p):
     return p
 
 
-def pet_stage_for(xp):
+def pet_stage_for(xp, hatched=False):
+    """Стадия питомца. До вылупления — всегда 1 ("Яйцо").
+    После вылупления минимальная стадия 2 ("Малыш"), дальше — по XP."""
     st = 1
     for i, s in enumerate(PET_STAGES):
         if xp >= s["xp"]:
             st = i + 1
+    if hatched and st < 2:
+        st = 2
     return st
 
 
@@ -2569,14 +2573,14 @@ def pet_power(p):
     for s in PET_SPECIES:
         if s["id"] == p.get("species"):
             base = int(s["pow"])
-    st = pet_stage_for(int(p.get("xp", 0)))
+    st = pet_stage_for(int(p.get("xp", 0)), bool(p.get("species")))
     return base * 5 + st * 3
 
 
 def pet_view(acc):
     p = pet_acc(acc)
     pet_decay(p)
-    stage = pet_stage_for(int(p.get("xp", 0)))
+    stage = pet_stage_for(int(p.get("xp", 0)), bool(p.get("species")))
     p["stage"] = stage
     sp = None
     for s in PET_SPECIES:
@@ -2611,9 +2615,9 @@ def pet_add_xp(d, acc, kind, amount=None):
     p = pet_acc(acc)
     if not p.get("species"):
         return 0
-    old = pet_stage_for(int(p.get("xp", 0)))
+    old = pet_stage_for(int(p.get("xp", 0)), bool(p.get("species")))
     p["xp"] = int(p.get("xp", 0)) + int(pts)
-    new = pet_stage_for(int(p["xp"]))
+    new = pet_stage_for(int(p["xp"]), bool(p.get("species")))
     if new > old:
         p["stage"] = new
         p["shields"] = int(p.get("shields", 1)) + 1
