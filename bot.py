@@ -36,7 +36,8 @@ AD_CAMPAIGNS = [
         "text": "Ещё одна игра про подтексты. Открыть и забрать бонус",
         "url": os.environ.get("AD_BUMS_URL", "https://t.me/bums/app?startapp=ref_8684637509"),
         "img": "ad-bums.jpg",
-        "weight": 1,
+        # Вес 0: у Bums 502 на api.bums.bot, ссылка мёртвая — не тратим клики.
+        "weight": 0,
     },
     {
         "id": "notwise",
@@ -1259,6 +1260,7 @@ async def api_referral(request):
     link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}"
     save_store(d)
     return web.json_response({"ok": True, "invited": invited, "left": left,
+                              "uid": uid, "link": link, "bot": BOT_USERNAME,
                               "coupon": bool(acc.get("ref_coupon")),
                               "coupon_pack": REF_COUPON_PACK,
                               **wallet_view(acc)})
