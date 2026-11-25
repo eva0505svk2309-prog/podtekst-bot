@@ -425,7 +425,19 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   </div>
   <div class="small" style="margin-top:7px" id="promoNote">Бонус придёт сам, как только вернёшься в игру. Один раз.</div>
   <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +15 🪙</button></div>
+  <div id="adOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,2,16,.94);z-index:9999;align-items:center;justify-content:center;padding:18px;flex-direction:column">
+   <div style="max-width:420px;width:100%">
+    <img id="adImg" src="house-ad.jpg" style="width:100%;border-radius:16px;display:block">
+    <div id="adCount" style="text-align:center;color:#ffe9a8;font-weight:800;margin-top:12px;font-size:16px">Реклама через 5…</div>
+    <div id="adSub" style="text-align:center;color:#9fb6d4;font-size:12px;margin-top:5px">Досмотри до конца — получишь +15 🪙</div>
+   </div>
+  </div>
   <div class="small" style="margin-top:6px" id="adNote">До 5 просмотров в день.</div>
+  <div id="houseAd" style="margin-top:12px;cursor:pointer;position:relative;border-radius:14px;overflow:hidden;border:1px solid #3a2a55;background:#120a22;display:none">
+   <img id="houseAdImg" src="house-ad.jpg" alt="Угадай подтекст" style="width:100%;display:block">
+   <div style="position:absolute;left:0;right:0;bottom:0;padding:9px 11px;background:linear-gradient(transparent,rgba(10,4,22,.94));font-size:12px;color:#ffe9a8;font-weight:700">Нажми — получи +50 🪙 за регистрацию Mira</div>
+  </div>
+  <div class="small" style="margin-top:6px" id="houseAdNote">Пока нет рекламодателей — на этом месте наша карточка. Подключи Mira, вернись, и бонус начислится сам.</div>
  </div>
 <div class="card" style="margin-bottom:10px" id="bpCard">
   <div style="font-weight:800;margin-bottom:6px">🎟️ Билет сезона</div>
@@ -1470,18 +1482,56 @@ function initReferral(){
  };
  var pt=$("promoText"); if(pt) pt.textContent="Подключи Mira в Telegram — вернёшься в игру, и +50 🪙 прилетят автоматически.";
  var pn=$("promoNote"); if(pn) pn.textContent="Бонус придёт сам, как только вернёшься в игру. Один раз.";
+ /* Баннер показываем, пока игрок не забрал бонус за Mira. */
+ try{
+  api2("/api/promo",{}).then(function(pj){
+   var claimed=pj&&pj.claimed;
+   var hb=$("houseAd"); if(hb) hb.style.display=claimed?"none":"block";
+   var hn=$("houseAdNote"); if(hn) hn.style.display=claimed?"none":"block";
+  }).catch(function(){});
+ }catch(e){}
  /* Бонус начисляется автоматически при возврате из Mira.
     Раньше игрок уходил к Mira и терял 50 монет: вспомнить про кнопку почти невозможно. */
  try{checkPromoReturn();}catch(e){}
  /* Rewarded-реклама: +15 🪙 за просмотр, лимит 5 в день (лимит держит сервер). */
- var ad=$("adBtn"); if(ad) ad.onclick=async function(){
+ var ad=$("adBtn"), adOv=$("adOverlay"), adCnt=$("adCount"), adSub=$("adSub"), adImg=$("adImg");
+ /* Сначала показываем рекламу (5 сек), монеты начисляем ТОЛЬКО после просмотра. */
+ async function showAd(){
+  if(!adOv) return false;
+  adOv.style.display="flex";
+  var left=5;
+  if(adCnt) adCnt.textContent="Реклама через "+left+"…";
+  if(adSub) adSub.textContent="Досмотри до конца — получишь +15 🪙";
+  await new Promise(function(res){ var tm=setInterval(function(){
+    left--; if(adCnt) adCnt.textContent=left>0?("Реклама через "+left+"…"):"Можно забирать монеты!";
+    if(left<=0){clearInterval(tm);res();}
+  },1000); });
+  if(adSub) adSub.textContent="Плюс 15 🪙 начисляем…";
+  return true;
+ }
+ if(ad) ad.onclick=async function(){
+  if(ad.disabled) return;
+  var watched=await showAd();
+  if(!watched){ toast("Реклама сейчас недоступна"); return; }
   var j=await api2("/api/ad/reward",{});
   if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙"; toast("Начислено +"+j.reward+" 🪙");
    if(typeof j.coins==="number"){S.coins=j.coins;paint();}
    var an=$("adNote"); if(an&&typeof j.left==="number") an.textContent="Осталось просмотров сегодня: "+j.left;
+   if(adOv) adOv.style.display="none";
   } else if(j&&j.error==="ad limit"){ ad.disabled=true; ad.textContent="Реклама на сегодня закончилась";
+   if(adOv) adOv.style.display="none";
    var an2=$("adNote"); if(an2) an2.textContent="Приходи завтра — будут новые монеты.";
-  } else { toast("Реклама сейчас недоступна"); }
+  } else { toast("Реклама сейчас недоступна"); if(adOv) adOv.style.display="none"; }
+ };
+ /* House-реклама: сторонних рекламодателей пока нет, поэтому rewarded-слот
+    занимает карточка Mira с реферальной ссылкой. Клик фиксируем, а бонус
+    +50 капает при возврате в игру (checkPromoReturn -> /api/promo/return). */
+ var ha=$("houseAd");
+ if(ha) ha.onclick=function(){
+  try{tg.openLink(MIRA_REF_URL);}catch(e){window.open(MIRA_REF_URL,"_blank");}
+  try{localStorage.setItem("pt_promo_left",String(Date.now()));}catch(e){}
+  api2("/api/promo/click",{source:"house_ad"}).catch(function(){});
+  toast("Вернись в игру — начислим +50 \uD83E\uDE99");
  };
  loadReferral();
 }
