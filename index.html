@@ -617,8 +617,19 @@ var LOC=(function(){
          поэтому отдаём правдоподобные данные — иначе в профиле «Уровень undefined». */
       if(path==="/api/bp"){
         var ob=st();
-        var bl=ob.bp||{coins:0,level:1,levels:[],claimed:[]};
-        return Promise.resolve({ok:true,coins:bl.coins||0,level:bl.level||1,max_level:7,levels:bl.levels||[],claimed:bl.claimed||[],to_next:0,next_name:"",skin:""});
+        var bl=ob.bp||{coins:0,level:1,claimed:[]};
+        bl.coins=bl.coins||0;bl.claimed=bl.claimed||[];
+        var LVS=[{c:0,n:"Старт",r:{}},{c:500,n:"+100 🪙",r:{coins:100}},{c:1200,n:"+200 🪙",r:{coins:200}},
+                 {c:2500,n:"+1 💗",r:{lives:1}},{c:4500,n:"+300 🪙",r:{coins:300}},
+                 {c:7000,n:"🌈 Радуга",r:{skin:"rainbow"}},{c:10000,n:"+500 🪙",r:{coins:500}}];
+        var lv=1;for(var bi=0;bi<LVS.length;bi++){if(bl.coins>=LVS[bi].c)lv=bi+1;}
+        bl.level=lv;
+        var levelsArr=LVS.map(function(L,ix){var n=ix+1;return {level:n,coins:L.c,name:L.n,reward:L.r,
+            unlocked:bl.coins>=L.c,claimed:bl.claimed.indexOf(n)>=0,
+            claimable:(bl.coins>=L.c&&n>1&&bl.claimed.indexOf(n)<0)};});
+        var nxt=LVS[lv]||null;
+        return Promise.resolve({ok:true,coins:bl.coins,level:lv,max_level:LVS.length,levels:levelsArr,
+          claimed:bl.claimed,to_next:nxt?(nxt.c-bl.coins):0,next_name:nxt?nxt.n:"Максимум",skin:ob.skin||""});
       }
       if(path==="/api/ads/serve"){
         /* Локально показываем карточку Mira — это рабочая рефералка. */
@@ -664,6 +675,117 @@ var LOC=(function(){
         o.tourney.forEach(function(r,i){r.place=i+1;});
         save(o);
         return Promise.resolve({ok:true,top:o.tourney,my_place:o.tourney.length,my_score:o.tourney[0]?o.tourney[0].score:0});
+      }
+      /* --- Офлайн-режим: эндпоинты, которых раньше не было.
+         Без них кнопки «Посмотреть рекламу» и «Вызвать» выглядели сломанными
+         при открытии игры вне Telegram. Контракты повторяют серверные. --- */
+      if(path==="/api/ad/reward"){
+        var t2=day();
+        o.adSeen=o.adSeen||{};o.adSeen[t2]=o.adSeen[t2]||0;
+        if(o.adSeen[t2]>=5){ return Promise.resolve({ok:false,error:"ad limit",coins:o.coins,lives:o.lives}); }
+        o.adSeen[t2]++;o.coins+=15;
+        save(o);
+        return Promise.resolve({ok:true,reward:15,left:5-o.adSeen[t2],coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level});
+      }
+      if(path==="/api/bp/claim"){
+        var LV=[{c:0,n:"Старт",r:{}},{c:500,n:"+100 🪙",r:{coins:100}},{c:1200,n:"+200 🪙",r:{coins:200}},
+                 {c:2500,n:"+1 💗",r:{lives:1}},{c:4500,n:"+300 🪙",r:{coins:300}},
+                 {c:7000,n:"🌈 Радуга",r:{skin:"rainbow"}},{c:10000,n:"+500 🪙",r:{coins:500}}];
+        var want=parseInt(body.level||0,10)||0;
+        o.bp=o.bp||{coins:0,level:1,claimed:[]};
+        o.bp.coins=o.bp.coins||0;o.bp.claimed=o.bp.claimed||[];
+        var lvl=1;for(var i=0;i<LV.length;i++){if(o.bp.coins>=LV[i].c)lvl=i+1;}
+        var got=[];
+        if(want<=1) return Promise.resolve({ok:false,error:"nothing to claim",coins:o.coins});
+        if(o.bp.claimed.indexOf(want)>=0) return Promise.resolve({ok:false,error:"already claimed",coins:o.coins});
+        if(want>LV.length||o.bp.coins<LV[want-1].c) return Promise.resolve({ok:false,error:"level locked",coins:o.coins});
+        var rw=LV[want-1].r||{};
+        if(rw.coins){o.coins+=rw.coins;got.push("+"+rw.coins+" 🪙");}
+        if(rw.lives){o.lives=Math.min(9,o.lives+rw.lives);got.push("+"+rw.lives+" 💗");}
+        if(rw.skin){o.skin=rw.skin;got.push("🌈 скин");}
+        if(rw.noads){o.noads=true;got.push("без рекламы");}
+        o.bp.claimed.push(want);o.bp.level=lvl;save(o);
+        return Promise.resolve({ok:true,level:want,got:got,coins:o.coins,lives:o.lives});
+      }
+      if(path==="/api/pet"){
+        o.pet=o.pet||{hatch:0,stage:1,xp:0,species:"",hunger:70,happiness:70,hygiene:70,energy:70,shields:1,cd:{}};
+        var P=o.pet;
+        var ACTIONS={feed:{cost:10,need:"hunger",emoji:"🍎",name:"Кормить"},play:{cost:15,need:"happiness",emoji:"🎮",name:"Играть"},
+                     wash:{cost:15,need:"hygiene",emoji:"🧼",name:"Мыть"},sleep:{cost:0,need:"energy",emoji:"🌙",name:"Спать"}};
+        var STAGES=[{n:1,name:"Яйцо",emoji:"🥚",xp:0},{n:2,name:"Малыш",emoji:"🐤",xp:60},{n:3,name:"Друг",emoji:"🐥",xp:200},
+                    {n:4,name:"Хранитель",emoji:"🧙",xp:600},{n:5,name:"Легенда",emoji:"🦅",xp:1500}];
+        var SPECIES=[{id:"cat",name:"Кот",emoji:"🐱"},{id:"fox",name:"Лис",emoji:"🦊"},{id:"dragon",name:"Дракон",emoji:"🐉"},{id:"eagle",name:"Орёл",emoji:"🦅"}];
+        var act=body.action||"state";
+        function pview(){
+          var st=1;for(var k=0;k<STAGES.length;k++){if(P.xp>=STAGES[k].xp)st=k+1;}
+          var sp=null;for(var k2=0;k2<SPECIES.length;k2++){if(SPECIES[k2].id===P.species)sp=SPECIES[k2];}
+          var nxt=st<STAGES.length?STAGES[st].xp:null;
+          return {stage:st,stage_name:STAGES[st-1].name,stage_emoji:STAGES[st-1].emoji,xp:P.xp,next_xp:nxt,
+                  hatched:!!P.species,hatch:P.hatch,need_hatch:5,species:sp,hunger:P.hunger,happiness:P.happiness,
+                  hygiene:P.hygiene,energy:P.energy,shields:P.shields,power:P.species?8:0,cd:P.cd,actions:ACTIONS,now:Math.floor(Date.now()/1000)};
+        }
+        if(act==="hatch"){
+          if(P.species){ save(o); return Promise.resolve({ok:false,error:"already hatched",pet:pview()}); }
+          P.hatch++;if(P.hatch>=5){P.species=SPECIES[Math.floor(Math.random()*SPECIES.length)].id;P.stage=2;}
+          save(o);
+          return Promise.resolve({ok:true,hatched:!!P.species,species:P.species?{name:pview().species.name,emoji:pview().species.emoji}:null,pet:pview(),coins:o.coins,lives:o.lives});
+        }
+        if(act==="care"){
+          var key=body.kind||"";var A=ACTIONS[key];
+          if(!A){save(o);return Promise.resolve({ok:false,error:"bad action",pet:pview()});}
+          if(!P.species){save(o);return Promise.resolve({ok:false,error:"not hatched",pet:pview()});}
+          var now=Math.floor(Date.now()/1000);
+          P.cd=P.cd||{};var last=P.cd[key]||0;
+          if(now-last<1800){save(o);return Promise.resolve({ok:false,error:"cooldown",wait:1800-(now-last),pet:pview(),coins:o.coins});}
+          if(o.coins<A.cost){save(o);return Promise.resolve({ok:false,error:"not enough coins",pet:pview(),coins:o.coins});}
+          o.coins-=A.cost;P.cd[key]=now;P[A.need]=Math.min(100,(P[A.need]||0)+40);P.xp+=20;
+          var st2=1;for(var k3=0;k3<STAGES.length;k3++){if(P.xp>=STAGES[k3].xp)st2=k3+1;}
+          P.stage=st2;save(o);
+          return Promise.resolve({ok:true,pet:pview(),coins:o.coins,lives:o.lives});
+        }
+        save(o);
+        return Promise.resolve({ok:true,pet:pview()});
+      }
+      if(path==="/api/contest"){
+        var TIERS=[{id:"t1",name:"Конкурс подтекста",emoji:"🎯",prize_stars:25,prize_coins:300,winners:3,points:30,
+                     start:"2026-11-21T00:00:00",end:"2026-12-01T23:59:00",req:{m3_lvl:2,quiz_streak:3}},
+                    {id:"t2",name:"Ночной конкурс",emoji:"🌙",prize_stars:50,prize_coins:500,winners:1,points:60,
+                     start:"2026-11-28T00:00:00",end:"2026-12-08T23:59:00",req:{m3_lvl:10,day_streak:3},after:"t1"},
+                    {id:"t3",name:"Финал месяца",emoji:"👑",prize_stars:100,prize_coins:1000,winners:1,points:100,
+                     start:"2026-12-08T00:00:00",end:"2026-12-15T23:59:00",req:{tourney:100},after:"t2"}];
+        o.ct=o.ct||{points:0,tickets:0,paid:0};
+        var tv=TIERS.map(function(tr){
+          var un=(tr.id==="t1");
+          return {id:tr.id,name:tr.name,emoji:tr.emoji,prize_stars:tr.prize_stars,prize_coins:tr.prize_coins,
+                  winners:tr.winners,points_needed:tr.points,points:o.ct.points,tickets:un?o.ct.tickets:0,
+                  paid_tickets:o.ct.paid,unlocked:un,req:tr.req,req_met:un,after:tr.after||null,start:tr.start,end:tr.end};
+        });
+        var act2=tv[0];
+        return Promise.resolve({ok:true,state:"running",tiers:tv,active_tier:act2,unlocked:["t1"],
+          points:o.ct.points,points_needed:30,tickets:o.ct.tickets,paid_tickets:o.ct.paid,
+          paid_stars:5,paid_tickets_amount:1,winners:3,prize_coins:300,prize_stars:25,top:[]});
+      }
+      if(path==="/api/duel"){
+        var a2=body.action||"state";
+        if(a2==="invite"){
+          if(!(o.pet&&o.pet.species)) return Promise.resolve({ok:false,error:"not hatched",msg:"Сначала вылупи питомца"});
+          var fr=(body.friend||"").trim().replace(/^@/,"");
+          if(!fr) return Promise.resolve({ok:false,error:"no friend",msg:"Введи юзернейм друга"});
+          o.duelInvites=o.duelInvites||{};o.duelInvites[fr]={at:Date.now()};
+          save(o);
+          return Promise.resolve({ok:true,sent:true,friend:fr});
+        }
+        if(a2==="pvp_state"){
+          var code=body.code||"";
+          o.duelInvites=o.duelInvites||{};
+          if(!o.duelInvites[code]) return Promise.resolve({ok:false,error:"not found",msg:"Вызов не найден"});
+          return Promise.resolve({ok:true,pvp:{status:"waiting",qs:[],host:{done:false,score:0},guest:{done:false,score:0}}});
+        }
+        if(a2==="pvp_answer"){
+          return Promise.resolve({ok:true,score:0,correct:false,pvp:{status:"waiting",qs:[],host:{done:false,score:0},guest:{done:false,score:0}}});
+        }
+        var tgts=[{uid:"me",name:"Ты",best:o.best||0,streak:o.streak||0,power:8,shadow:true}];
+        return Promise.resolve({ok:true,targets:tgts,tickets:o.ct?o.ct.tickets:0});
       }
       save(o);return Promise.resolve({ok:true});
     },
