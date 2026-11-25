@@ -18,8 +18,9 @@ header{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .logo span{background:linear-gradient(90deg,#ff4d8d,#a86bff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .pill{background:#25153f;border:1px solid #4a2f86;border-radius:999px;padding:6px 11px;font-weight:700;font-size:14px}
 .card{background:linear-gradient(160deg,#1e1134,#150c26);border:1px solid #3b2a63;border-radius:16px;padding:12px}
-.tabs{display:flex;gap:6px;background:#1c1030;padding:5px;border-radius:14px}
-.tabs button{flex:1;background:transparent;border:0;color:#a894d4;font-weight:800;font-size:14px;padding:9px 4px;border-radius:11px;cursor:pointer}
+.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;background:#1c1030;padding:6px;border-radius:14px}
+.tabs button{min-width:0;background:transparent;border:0;color:#a894d4;font-weight:800;font-size:13px;line-height:1.25;padding:10px 4px;border-radius:11px;cursor:pointer;white-space:normal;overflow-wrap:anywhere}
+.tabs .nyflag,.tabs #newBadge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:7px;background:#ff4d8d;color:#fff;margin-left:3px;line-height:1.5}
 .tabs button.on{background:linear-gradient(135deg,#ff4d8d,#a86bff);color:#fff}
 button{background:#241546;border:1px solid #4a2f86;color:#f4ecff;border-radius:12px;padding:12px 8px;font-size:15px;font-weight:700;cursor:pointer}
 button:active{transform:scale(.97)}
@@ -939,7 +940,12 @@ function renderQ(){
   qOpts.forEach((t,k)=>{const b=document.createElement("button");b.className="opt";b.textContent=t;
     b.onclick=()=>pick(k,b);$("opts").appendChild(b);});
   clearInterval(timer);$("q").style.opacity=1;
-  timer=setInterval(()=>{left-=0.1;if(left<=0){clearInterval(timer);pick(-1,null)}},100);
+  timer=setInterval(()=>{left-=0.1;if(left<=0){clearInterval(timer);timeoutAnswer()}},100);
+}
+function timeoutAnswer(){
+  if(answered)return;answered=true;clearInterval(timer);
+  [...$("opts").children].forEach(b=>b.disabled=true);
+  $("qhint").textContent="⏱ Время вышло — вопрос без ответа. Нажми «Дальше».";
 }
 async function pick(k,btn){
   if(answered)return;answered=true;clearInterval(timer);
@@ -954,7 +960,7 @@ async function pick(k,btn){
     const r=await fetch(API+"/api/answer",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({init_data:INIT,id:qi,choice:k})});
     const j=await r.json();
-    if(!j||j.error){toast("Ошибка проверки ответа");answered=false;return;} if(j.already_answered){toast("Этот вопрос уже засчитан — дождись нового"); if(typeof j.coins==="number")S.coins=j.coins; answered=false; return;} if(typeof j.level==="number"){BP.coins=(typeof j.coins==="number"?j.coins:BP.coins);BP.level=j.level;bpRender();}
+    if(!j||j.error){var em=(j&&j.error)?j.error:"no response";var msg=(em==="bad init_data")?"Сессия устарела — закрой и открой игру заново":(em==="bad question")?"Вопрос устарел — нажми «Дальше»":(em==="bad params")?"Сбой проверки — нажми «Дальше»":"Нет связи с сервером — попробуй ещё раз");toast(msg);answered=false;return;} if(j.already_answered){toast("Этот вопрос уже засчитан — дождись нового"); if(typeof j.coins==="number")S.coins=j.coins; answered=false; return;} if(typeof j.level==="number"){BP.coins=(typeof j.coins==="number"?j.coins:BP.coins);BP.level=j.level;bpRender();}
     [...$("opts").children].forEach((b,i)=>{if(j.correct&&i===k)b.classList.add("ok");else if(!j.correct&&i===k)b.classList.add("no");else b.disabled=true});
     if(j.correct){
       $("qhint").textContent="✅ Верно! +10 🪙 · серия "+j.streak+(j.streak%5===0?" · бонус +25 🪙":"");
@@ -965,13 +971,17 @@ async function pick(k,btn){
   }catch(e){toast("Нет связи с сервером");}
 }
 $("qNext").onclick=()=>loadQuestion("random");
-$("qSkip").onclick=()=>{if(!answered)pick(-1,null)};
+$("qSkip").onclick=()=>{if(!answered){answered=true;clearInterval(timer);[...$("opts").children].forEach(b=>b.disabled=true);$("qhint").textContent="⏭ Пропущено. Нажми «Дальше».";}};
 $("qBuy").onclick=()=>{botCmd("buy")};
 $("qRef").onclick=()=>{botCmd("ref")};
 $("qDaily").onclick=async()=>{
+  if(window.__dailyBusy)return;window.__dailyBusy=1;
   const j=await api("daily",{});
+  window.__dailyBusy=0;
   if(!j){toast("Нет связи с сервером");return;}
-  if(j.ok){toast("🎁 Бонус дня получен: +20 🪙 и +1 💗");}
+  if(j.granted===true){toast("🎁 Бонус дня получен: +20 🪙 и +1 💗");}
+  else if(j.granted===false){toast("Бонус дня уже получен сегодня 🗓");}
+  else if(j.ok){toast("🎁 Бонус дня получен: +20 🪙 и +1 💗");}
   else toast("Бонус дня уже получен сегодня");
 };
 
