@@ -2739,7 +2739,10 @@ def duel_shadow(d, uid):
     a = d.get(str(uid))
     if not isinstance(a, dict):
         return None
-    best = int(a.get("quiz_best", 0) or 0)
+    # ВНИМАНИЕ: раньше здесь читалось несуществующее поле "quiz_best", поэтому
+    # best всегда было 0, и duel_targets отсеивал ВСЕХ соперников как пустых —
+    # дуэли были недоступны вообще. Настоящее поле называется "best".
+    best = int(a.get("quiz_best", 0) or a.get("best", 0) or 0)
     streak = int(a.get("quiz_streak", 0) or 0)
     p = a.get("pet") or {}
     power = 0
