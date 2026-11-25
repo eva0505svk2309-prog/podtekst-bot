@@ -80,7 +80,11 @@ PACKS = {
     "lives":     (200, "+1 жизнь"),
     "noads":     (350, "Без рекламы"),
     "contest_entry": (100, "5 билетов в розыгрыш"),
+    # Реферальный пакет: 100 монет за 80 звёзд вместо 100. Купон даётся
+    # пригласившему за каждого нового друга и тратится один раз.
+    "coins_100_ref": (80, "100 монет (по рефералке)"),
 }
+REF_COUPON_PACK = "coins_100_ref"
 ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads",
           "buy:contest_entry": "contest_entry"}
 
@@ -101,6 +105,8 @@ def apply_referral(user_id, payload):
     a1 = acc_of(d, inviter); a2 = acc_of(d, user_id)
     a1["coins"] += 50
     a1["invited"] = a1.get("invited", 0) + 1
+    # Звёздный купон: -20 звёзд на следующую покупку 100 монет.
+    a1["ref_coupon"] = True
     contest_add_points(d, a1, "ref", 25); bp_add_points(d, a1, "ref")
     a2["coins"] += 20
     # Milestone: every 3 friends -> +100 coins to the inviter
@@ -117,16 +123,16 @@ async def start(message: types.Message):
     payload = (message.text.split()[-1] if message.text else "") or ""
     # Deep-link команды из Mini App: /start buy | buys | ref | lives | noads
     if payload in ("buy", "buys"):
-        await send_invoice(message.chat.id, "coins_100")
+        await send_invoice(message.chat.id, "coins_100", message.from_user.id)
         return
     if payload == "buy:lives":
-        await send_invoice(message.chat.id, "lives")
+        await send_invoice(message.chat.id, "lives", message.from_user.id)
         return
     if payload == "buy:noads":
-        await send_invoice(message.chat.id, "noads")
+        await send_invoice(message.chat.id, "noads", message.from_user.id)
         return
     if payload == "buy:contest_entry":
-        await send_invoice(message.chat.id, "contest_entry")
+        await send_invoice(message.chat.id, "contest_entry", message.from_user.id)
         return
     if payload == "ref":
         await referral(message)
@@ -289,10 +295,21 @@ async def help_(message: types.Message):
 
 @dp.message(Command("buy"))
 async def buy(message: types.Message):
-    await send_invoice(message.chat.id, "coins_100")
+    await send_invoice(message.chat.id, "coins_100", message.from_user.id)
 
-async def send_invoice(chat_id: int, payload: str):
+async def send_invoice(chat_id: int, payload: str, user_id=None):
     amount, title = PACKS.get(payload, PACKS["coins_100"])
+    # Реферальный купон: если у игрока есть непотраченный — подставляем
+    # льготный пакет вместо обычного.
+    if user_id is not None and payload == "coins_100":
+        try:
+            d = load_store()
+            acc = acc_of(d, user_id)
+            if acc.get("ref_coupon"):
+                payload = REF_COUPON_PACK
+                amount, title = PACKS[REF_COUPON_PACK]
+        except Exception:
+            pass
     await bot.send_invoice(chat_id=chat_id, title=title,
         description="ПОДТЕКСТ — покупка в игре (Telegram Stars)",
         payload=payload, provider_token="", currency="XTR",
@@ -413,6 +430,9 @@ def grant(user_id, payload):
     u = str(user_id)
     acc = d.setdefault(u, {"coins": 0, "lives": 0, "noads": False, "charges": []})
     if payload == "test_1star": acc["coins"] += 1
+    elif payload == REF_COUPON_PACK:
+        acc["coins"] += 100
+        acc["ref_coupon"] = False
     elif payload == "coins_100": acc["coins"] += 100
     elif payload == "coins_500": acc["coins"] += 500
     elif payload == "lives": acc["lives"] += 1
@@ -462,9 +482,9 @@ async def app_data(message: types.Message):
     data = (message.web_app.data or "").strip()
     logging.info("APPDATA user=%s data=%s", message.from_user.id, data)
     if data in ALIAS:
-        await send_invoice(message.chat.id, ALIAS[data])
+        await send_invoice(message.chat.id, ALIAS[data], message.from_user.id)
     elif data.startswith("buy:"):
-        await send_invoice(message.chat.id, data[4:])
+        await send_invoice(message.chat.id, data[4:], message.from_user.id)
     elif data == "ref":
         await referral(message)
     elif data.startswith("score:"):
@@ -1148,7 +1168,8 @@ async def api_referral(request):
     link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}"
     save_store(d)
     return web.json_response({"ok": True, "invited": invited, "left": left,
-                              "link": link, "bonus": 50, "new_bonus": 20,
+                              "coupon": bool(acc.get("ref_coupon")),
+                              "coupon_pack": REF_COUPON_PACK,
                               **wallet_view(acc)})
 
 
@@ -1752,6 +1773,64 @@ CARD_BANK = [
 CARD_BY_ID = {c[0]: c for c in CARD_BANK}
 CARD_OPEN_COST = 30
 
+# Подарки за коллекцию. Каждые N карт одной редкости — подарок.
+# gifts выдаются один раз за порог, поэтому храним счётчик в acc["gift_stage"].
+CARD_GIFTS = [
+    ("common", 10, {"coins": 100}, "🪙 100 монет"),
+    ("rare", 10, {"lives": 1}, "❤️ +1 жизнь"),
+    ("epic", 10, {"coins": 300, "lives": 1}, "🪙 300 монет и ❤️ +1 жизнь"),
+    ("legend", 3, {"noads": True, "coins": 500}, "🚫 без рекламы и 🪙 500 монет"),
+]
+CARD_GIFT_THRESHOLDS = {k: n for k, n, _r, _t in CARD_GIFTS}
+
+
+def _card_gift_check(acc, card_id):
+    """Проверяет пороги подарков по коллекции. Возвращает список подарков.
+
+    Считаем по редкости, а не по конкретной карте: «10 обычных» — это любые
+    десять обычных карт в коллекции, а не десять копий одной и той же.
+    """
+    c = CARD_BY_ID.get(card_id)
+    if not c:
+        return []
+    rarity = c[1]
+    th = CARD_GIFT_THRESHOLDS.get(rarity)
+    if not th:
+        return []
+    raw = acc.get("cards") or {}
+    have = 0
+    for cid, n in raw.items():
+        cc = CARD_BY_ID.get(cid)
+        if cc and cc[1] == rarity:
+            have += int(n or 0)
+    if have <= 0:
+        return []
+    stage = acc.setdefault("gift_stage", {})
+    done = int(stage.get(rarity, 0))
+    reached = have // th          # 23 обычных = пороги 10 и 20 пройдены
+    if reached <= done:
+        return []
+    gifts = []
+    for r, n, reward, title in CARD_GIFTS:
+        if r != rarity:
+            continue
+        for k in range(done + 1, reached + 1):
+            g = dict(reward); g["title"] = title; g["stage"] = k
+            gifts.append(g)
+    stage[rarity] = reached
+    return gifts
+
+
+def _card_gift_apply(acc, gifts):
+    """Начисляет подарки игроку."""
+    out = []
+    for g in gifts:
+        if "coins" in g: acc["coins"] = int(acc.get("coins", 0)) + int(g["coins"])
+        if "lives" in g: acc["lives"] = min(9, int(acc.get("lives", 5)) + int(g["lives"]))
+        if g.get("noads"): acc["noads"] = True
+        out.append(g["title"])
+    return out
+
 def _pick_rarity():
     """Взвешенный выбор редкости: обычных много, легендарных почти нет."""
     total = sum(RARITY_WEIGHT.values())
@@ -1783,9 +1862,24 @@ def cards_view(acc):
                       "rarity_name": RARITY_INFO[c[1]]["name"],
                       "rarity_icon": RARITY_INFO[c[1]]["icon"], "count": int(n)})
     items.sort(key=lambda x: (["common", "rare", "epic", "legend"].index(x["rarity"]), x["id"]))
+    # Прогресс до подарка: сколько карт этой редкости ещё нужно.
+    stage = acc.get("gift_stage") or {}
+    by_rar = {}
+    for cid, n in raw.items():
+        cc = CARD_BY_ID.get(cid)
+        if cc:
+            by_rar[cc[1]] = by_rar.get(cc[1], 0) + int(n or 0)
+    for it in items:
+        th = CARD_GIFT_THRESHOLDS.get(it["rarity"], 0)
+        done = int(stage.get(it["rarity"], 0))
+        it["gift_need"] = max(0, (done + 1) * th - by_rar.get(it["rarity"], 0)) if th else 0
+        it["gift_next"] = (done + 1) * th if th else 0
+        it["gift_total"] = th
+        it["gift_have"] = by_rar.get(it["rarity"], 0)
     return {"ok": True, "total": total, "counts": counts, "items": items,
             "opened": acc.get("cards_opened", 0),
             "cost": CARD_OPEN_COST,
+            "gifts": [{"rarity": r, "need": n, "title": t} for r, n, _x, t in CARD_GIFTS],
             "rarities": [{"key": k, "name": n, "icon": i, "weight": w}
                          for k, n, i, w in CARD_RARITY]}
 
@@ -1858,10 +1952,15 @@ async def api_cards(request):
         acc.setdefault("cards", {})
         acc["cards"][cid] = acc["cards"].get(cid, 0) + 1
         acc["cards_opened"] = acc.get("cards_opened", 0) + 1
+        # Подарки за коллекцию: порог по редкости (10 обычных, 10 редких,
+        # 10 эпических, 3 легендарных). Порог выдаётся один раз.
+        gifts = _card_gift_check(acc, cid)
+        gift_titles = _card_gift_apply(acc, gifts)
         save_store(d)
         is_new = acc["cards"][cid] == 1
         return web.json_response({
             "ok": True, "is_new": is_new, "coins": acc["coins"],
+            "gifts": gift_titles,
             "card": {"id": cid, "text": card[2], "sub": card[3], "rarity": card[1],
                      "rarity_name": RARITY_INFO[card[1]]["name"],
                      "rarity_icon": RARITY_INFO[card[1]]["icon"]},
