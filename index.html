@@ -1497,22 +1497,37 @@ $("dStart").onclick=()=>{rng=seeded();score=0;goal=800;moves=18;combo=0;sel=null
  $("m3hint").textContent="Челлендж дня 🏆 — одинаковые задания у всех";document.querySelector('.tabs button[data-v=m3]').click()};
 /* Настоящий шеринг: пользователь сам выбирает чат/друга в Telegram.
    Раньше кнопка просто открывала бота — шарить было нечем. */
+/* Шаринг: tg.switchInlineQuery в Mini App бота НЕ работает (это метод для
+   пользовательских клиентов), поэтому старый код просто копировал текст.
+   Теперь: 1) пробуем нативный диалог Telegram (Telegram.WebApp.share в новых
+   клиентах), 2) иначе — копируем реферальную ссылку с payload ref<uid>,
+   чтобы приглашённый реально засчитывался. */
+var SHARE_URL="";
 function shareResult(){
   var score=S.streak||0;
-  var text="Я набрал "+score+" 🏆 в ПОДТЕКСТЕ — угадываю скрытый смысл в обычных фразах. Сыграй так же: "
-    +"https://t.me/"+BOT+"?start=src_share";
+  // Реферальная ссылка: с payload, иначе виральный цикл разорван.
+  var uid=(window.S&&S.uid)||(typeof me!=="undefined"&&me&&me.uid)||null;
+  var link = SHARE_URL || ("https://t.me/"+BOT+"?start=ref"+(uid||""));
+  var text="Я набрал "+score+" подряд в ПОДТЕКСТЕ — угадываю скрытый смысл в обычных фразах. Сыграй так же: "+link;
+  // 1) Нативный диалог Telegram
   try{
-    if(tg&&tg.switchInlineQuery){
-      tg.switchInlineQuery(text,"score:"+score);
-      toast("Выбери чат или друга 👆");
-    }else{
-      navigator.clipboard.writeText(text).then(function(){
-        toast("Скопировано! Вставь в любой чат — и получишь +20 🪙");
+    var WA = (window.Telegram && window.Telegram.WebApp) || null;
+    if(WA && typeof WA.share==="function"){
+      WA.share({url:link,text:text},function(ok){
+        if(ok){toast("Отправлено! Друг получит +20 🪙, тебе +50 🪙");}
+        else{toast("Отмена");}
       });
+      return;
     }
-  }catch(e){
+  }catch(e){}
+  // 2) Копирование — с явным предупреждением, что надо отправить вручную
+  try{
+    navigator.clipboard.writeText(text).then(function(){
+      toast("Скопировано! Вставь в любой чат — и получишь +20 🪙");
+    });
+  }catch(e2){
     try{navigator.clipboard.writeText(text);toast("Скопировано — вставь в чат");}
-    catch(e2){toast("Не удалось поделиться");}
+    catch(e3){toast("Не удалось поделиться");}
   }
 }
 $("dShare").onclick=shareResult;
@@ -1522,11 +1537,16 @@ $("mShare").onclick=function(){shareResult();};
 /* ---------- PROFILE buttons ---------- */
 $("pRefresh").onclick=async function(){await m3Api("profile");renderProfile();toast("Профиль обновлён");};
 $("pShare").onclick=function(){
+  var uid=(window.S&&S.uid)||null;
+  var link="https://t.me/"+BOT+"?start=ref"+(uid||"");
   var txt="🎄 Я в ПОДТЕКСТЕ: уровень "+m3.lvl+" · рекорд "+m3.best+" очков · гирлянд "+m3.garland
-    +" · достижений "+achGot.length+"/"+ACH_LIST.length+". Сыграй и обгони: https://t.me/"+BOT+"?start=src_share";
-  try{if(tg&&tg.switchInlineQuery){tg.switchInlineQuery(txt,"profile:"+m3.lvl);toast("Выбери чат или друга 👆");}
-  else{navigator.clipboard.writeText(txt).then(()=>toast("Скопировано!"));}
-  }catch(e){try{navigator.clipboard.writeText(txt);toast("Скопировано!");}catch(e2){toast("Не удалось");}}
+    +" · достижений "+achGot.length+"/"+ACH_LIST.length+". Сыграй и обгони: "+link;
+  try{
+    var WA=(window.Telegram&&window.Telegram.WebApp)||null;
+    if(WA&&typeof WA.share==="function"){WA.share({url:link,text:txt},function(ok){toast(ok?"Отправлено!":"Отмена");});return;}
+  }catch(e){}
+  try{navigator.clipboard.writeText(txt).then(()=>toast("Скопировано!"));}
+  catch(e2){try{navigator.clipboard.writeText(txt);toast("Скопировано!");}catch(e3){toast("Не удалось");}}
 };
 
 /* ---------- boot ---------- */
