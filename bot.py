@@ -455,7 +455,8 @@ async def paid(message: types.Message):
     charge = p.telegram_payment_charge_id
     logging.info("PAYMENT user=%s payload=%s stars=%s charge=%s", message.from_user.id, p.invoice_payload, p.total_amount, charge)
     acc = grant(message.from_user.id, p.invoice_payload)
-    d = load_store(); d.setdefault(str(message.from_user.id), {}).setdefault("charges", []).append(charge)
+    d = load_store(); d.setdefault(str(message.from_user.id), {}).setdefault("charges", []).append(
+        {"charge": charge, "payload": p.invoice_payload, "at": datetime.now().isoformat()})
     save_store(d)
     await message.answer(f"Оплата прошла — товар уже в кошельке игры.\n\nБаланс: {acc['coins']} монет · {acc['lives']} жизней.", reply_markup=kb())
 
@@ -464,18 +465,62 @@ async def balance(message: types.Message):
     acc = load_store().get(str(message.from_user.id), {"coins": 0, "lives": 0, "noads": False})
     await message.answer(f"Кошелёк:\n{acc['coins']} монет · {acc['lives']} жизней · без рекламы: {'да' if acc.get('noads') else 'нет'}", reply_markup=kb())
 
+def revoke(user_id, payload):
+    """Отбирает товар, выданный за платёж. Возвращает True, если что-то снято."""
+    d = load_store(); acc = d.get(str(user_id))
+    if not acc:
+        return False
+    if payload == "test_1star":
+        acc["coins"] = max(0, acc.get("coins", 0) - 1); return True
+    if payload == REF_COUPON_PACK:
+        acc["coins"] = max(0, acc.get("coins", 0) - 100); acc["ref_coupon"] = False; return True
+    if payload == "coins_100":
+        acc["coins"] = max(0, acc.get("coins", 0) - 100); return True
+    if payload == "coins_500":
+        acc["coins"] = max(0, acc.get("coins", 0) - 500); return True
+    if payload == "lives":
+        acc["lives"] = max(0, acc.get("lives", 0) - 1); return True
+    if payload == "noads":
+        acc["noads"] = False; return True
+    if payload == "contest_entry":
+        tier = active_tier(acc)
+        if tier:
+            c = contest_tickets(acc)
+            row = c["tiers"].setdefault(tier["id"], {"points": 0, "paid_tickets": 0, "tickets": 0})
+            take = min(int(row.get("paid_tickets", 0)), CONTEST_TICKETS_PAID)
+            row["paid_tickets"] = max(0, int(row.get("paid_tickets", 0)) - take)
+            row["tickets"] = max(0, int(row.get("tickets", 0)) - take)
+            return True
+        return False
+    return False
+
+
 @dp.message(Command("refundlast"))
 async def refundlast(message: types.Message):
     d = load_store(); acc = d.get(str(message.from_user.id))
     if not acc or not acc.get("charges"):
         await message.answer("Нечего возвращать — нет завершённых платежей."); return
-    charge = acc["charges"][-1]
+    last = acc["charges"][-1]
+    # Старые записи — просто строка с charge id, без payload
+    if isinstance(last, str):
+        charge, payload = last, None
+    else:
+        charge, payload = last.get("charge"), last.get("payload")
     try:
         await bot.refund_star_payment(user_id=message.from_user.id, telegram_payment_charge_id=charge)
-        await message.answer("Звезда возвращена на твой баланс.")
     except Exception as e:
         logging.warning("refund failed: %s", e)
         await message.answer(f"Не получилось вернуть: {e}")
+        return
+    # Звезда возвращена — товар надо отобрать, иначе игрок получит и звёзды и товар.
+    if payload:
+        revoke(message.from_user.id, payload)
+        d = load_store(); a = d.get(str(message.from_user.id))
+        if a: a["charges"].pop()
+        save_store(d)
+        await message.answer("Звезда возвращена на твой баланс, товар за неё отобран.")
+    else:
+        await message.answer("Звезда возвращена на твой баланс.")
 
 @dp.message(lambda m: m.content_type == types.ContentType.WEB_APP_DATA)
 async def app_data(message: types.Message):

@@ -960,7 +960,7 @@ async function pick(k,btn){
     const r=await fetch(API+"/api/answer",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({init_data:INIT,id:qi,choice:k})});
     const j=await r.json();
-    if(!j||j.error){var em=(j&&j.error)?j.error:"no response";var msg=(em==="bad init_data")?"Сессия устарела — закрой и открой игру заново":(em==="bad question")?"Вопрос устарел — нажми «Дальше»":(em==="bad params")?"Сбой проверки — нажми «Дальше»":"Нет связи с сервером — попробуй ещё раз");toast(msg);answered=false;return;} if(j.already_answered){toast("Этот вопрос уже засчитан — дождись нового"); if(typeof j.coins==="number")S.coins=j.coins; answered=false; return;} if(typeof j.level==="number"){BP.coins=(typeof j.coins==="number"?j.coins:BP.coins);BP.level=j.level;bpRender();}
+    if(!j||j.error){var em=(j&&j.error)?j.error:"no response";var msg=(em==="bad init_data")?"Сессия устарела — закрой и открой игру заново":(em==="bad question")?"Вопрос устарел — нажми «Дальше»":(em==="bad params")?"Сбой проверки — нажми «Дальше»":"Нет связи с сервером — попробуй ещё раз";toast(msg);answered=false;return;} if(j.already_answered){toast("Этот вопрос уже засчитан — дождись нового"); if(typeof j.coins==="number")S.coins=j.coins; answered=false; return;} if(typeof j.level==="number"){BP.coins=(typeof j.coins==="number"?j.coins:BP.coins);BP.level=j.level;bpRender();}
     [...$("opts").children].forEach((b,i)=>{if(j.correct&&i===k)b.classList.add("ok");else if(!j.correct&&i===k)b.classList.add("no");else b.disabled=true});
     if(j.correct){
       $("qhint").textContent="✅ Верно! +10 🪙 · серия "+j.streak+(j.streak%5===0?" · бонус +25 🪙":"");
