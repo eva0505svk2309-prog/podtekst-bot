@@ -324,6 +324,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    <span id="cardsCount" style="font-size:13px;color:#9c7bff">0 карт</span>
   </div>
   <div id="cardsRar" style="font-size:13px;color:#9fb6d4;margin-bottom:9px"></div>
+  <div id="cardsGifts" style="margin-bottom:9px"></div>
   <div id="cardsGrid" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px"></div>
   <button class="pri" id="openCardBtn" style="width:100%">🃏 Открыть карточку — 30 🪙</button>
   <div class="small" style="margin-top:6px">Редкие выпадают реже. Чем больше коллекция — тем выше шанс на легендарную.</div>
@@ -410,7 +411,8 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
     <input id="refLink" readonly style="flex:1;min-width:0;background:#1c1030;border:1px solid #3a2a55;color:#e8dcff;border-radius:10px;padding:9px;font-size:12px" value="">
     <button id="refCopy" class="pri" style="white-space:nowrap">📋 Копировать</button>
    </div>
-   <div id="refStat" style="font-size:13px;color:#9fb6d4;margin-top:8px">Приглашено: 0 · до бонуса +100 🪙 осталось 3</div>
+   <div id="refStat" style="font-size:13px;color:#9fb6d4;margin-top:8px">
+ <div id="refCoupon" class="small" style="display:none;margin-top:6px;color:#ffd76e"></div>Приглашено: 0 · до бонуса +100 🪙 осталось 3</div>
    <div class="small" style="margin-top:6px">Друг пришёл → тебе +50 🪙, ему +20 🪙. Каждые 3 друга — ещё +100 🪙 и +1 💗.</div>
   </div>
  </div>
@@ -718,6 +720,8 @@ async function loadCards(){
  let parts=[];
  for(const k in (j.counts||{})){parts.push(RAR_ICON[k]+" "+RAR_NAME[k]+": "+(j.counts[k]||0));}
  $("cardsRar").textContent=parts.length?parts.join("  ·  "):"Пока пусто — открой первую карточку";
+ const gl=$("cardsGifts");
+ if(gl){ gl.innerHTML=(j.gifts||[]).map(x=>'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border-radius:9px;background:#2a1f52;border:1px solid #6b5aa8;font-size:11px">'+RAR_ICON[x.rarity]+' '+x.need+' → '+x.title+'</span>').join(""); }
  const g=$("cardsGrid");g.innerHTML="";
  if(!items.length){g.innerHTML='<div class="small">Коллекция пуста</div>';return;}
  items.forEach(c=>{
@@ -725,7 +729,8 @@ async function loadCards(){
   d.style.cssText="border:1px solid "+(RAR_CLR[c.rarity]||"#5a4a8a")+";border-radius:12px;padding:7px 9px;font-size:12px;background:#2a1f52;max-width:calc(50% - 4px);position:relative";
   d.innerHTML='<div style="font-weight:800">'+RAR_ICON[c.rarity]+' '+esc(c.text)+'</div>'+
    '<div style="color:#9fb6d4;margin-top:2px">'+esc(c.sub)+'</div>'+
-   '<div style="color:#9c7bff;margin-top:3px">×'+c.count+'</div>';
+   '<div style="color:#9c7bff;margin-top:3px">×'+c.count+'</div>'+
+   (c.gift_total?('<div style="color:#ffd76e;margin-top:3px;font-size:11px">🎁 до подарка: '+c.gift_need+'</div>'):'');
   if(c.count>=3){
    const ex=document.createElement("button");
    ex.textContent="Обменять 3 → 15 🪙";
@@ -753,6 +758,7 @@ $("openCardBtn").onclick=async()=>{
  if(typeof j.coins==="number"){S.coins=j.coins;paint();}
  const c=j.card||{};
  toast((j.is_new?"✨ Новая карточка! ":"🔁 Дубль. ")+(c.rarity_icon||"")+" "+(c.rarity_name||"")+" "+c.text);
+ if(j.gifts&&j.gifts.length){ toast("🎁 Подарок: "+j.gifts.join(", ")); }
  loadCards();
 };
 async function loadTourney(){
@@ -1446,6 +1452,11 @@ async function loadReferral(){
  if(!j||!j.ok)return;
  var box=$("refLink"); if(box) box.value=j.link||"";
  var st=$("refStat"); if(st) st.textContent="Приглашено: "+(j.invited||0)+" · до бонуса +100 🪙 осталось "+(j.left||3);
+ /* Купон: 100 монет за 80 ⭐ вместо 100. Подставляется автоматически. */
+ var cp=$("refCoupon"); if(cp){
+  if(j.coupon){cp.style.display="";cp.textContent="🎟️ У тебя купон: 100 монет за 80 ⭐ вместо 100 — скидка приготовилась.";}
+  else{cp.style.display="none";}
+ }
 }
 function initReferral(){
  var copy=$("refCopy"); if(copy) copy.onclick=async function(){
