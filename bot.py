@@ -3046,7 +3046,10 @@ async def api_duel(request):
             pvp["winner"] = ("host" if int(pvp["host"]["score"]) >= int(pvp["guest"]["score"])
                              else "guest")
         save_store(d2)
-        return web.json_response({"ok": True, "pvp": _pvp_public(pvp)})
+        # correct/score нужны клиенту, чтобы подсветить ответ и показать очки.
+        return web.json_response({"ok": True, "correct": ok,
+                                  "score": int(pvp[side].get("score", 0)),
+                                  "pvp": _pvp_public(pvp)})
 
     if action == "state":
         save_store(d)
