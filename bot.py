@@ -708,7 +708,10 @@ def register_visit(acc):
     days = acc.setdefault("days", {})
     t = today_key()
     if t in days:
-        return False, 0, int(acc.get("day_streak", 0))
+        # ВАЖНО: возвращаем ровно 4 значения — столько же распаковывает
+        # api_visit. Раньше здесь было 3, и КАЖДЫЙ повторный вход в игру
+        # в тот же день падал с 500 (ValueError при распаковке).
+        return False, 0, int(acc.get("day_streak", 0)), 0
     days[t] = 1
     if len(days) > 120:
         for k in sorted(days)[:40]:
