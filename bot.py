@@ -24,6 +24,31 @@ CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
 MIRA_REF   = os.environ.get("MIRA_REF", "8684637509")
 MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
 PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
+
+# ---- Рекламные кампании: клик по креативу ведёт по реферальной ссылке ----
+# Каждая кампания: id, название, текст, URL (рефералка), картинка, вес.
+# Клики считаются на сервере, чтобы видеть, какая кампания приносит игроков.
+# ССЫЛКИ ПРАВИТЬ ЗДЕСЬ — это единственное место, где задаются рефералки.
+AD_CAMPAIGNS = [
+    {
+        "id": "bums",
+        "title": "Bums — игра про то, что он имел в виду",
+        "text": "Ещё одна игра про подтексты. Открыть и забрать бонус",
+        "url": os.environ.get("AD_BUMS_URL", "https://t.me/bums_game_bot?start=ref_8684637509"),
+        "img": "ad-bums.jpg",
+        "weight": 1,
+    },
+    {
+        "id": "mira",
+        "title": "Mira — ИИ, который тебя понимает",
+        "text": "Твой персональный ИИ в Telegram. Подключи и получи +50 🪙",
+        "url": MIRA_URL,
+        "img": "house-ad.jpg",
+        "weight": 1,
+    },
+]
+AD_DEFAULT_IMG = "house-ad.jpg"
+AD_CLICK_BONUS = 15      # 🪙 игроку за просмотр рекламы (это же rewarded-слот)
 MISS_PENALTY_PCT = 10      # % от монет за пропуск дня (фишка Major)
 SUB_REWARD = 50            # 🪙 за подписку на канал (фишка Notcoin)
 # Deep-link: открыть Mira с уже подставленным вопросом (черновик в поле ввода).
@@ -1463,6 +1488,86 @@ def _lb_rows(d, limit=20):
                      "m3lvl": m3lvl, "days": days})
     rows.sort(key=lambda r: -r["score"])
     return rows[:limit]
+
+
+def _ad_pick(campaign_id=None, exclude=None):
+    """Выбирает кампанию для показа (взвешенно, без повтора подряд)."""
+    pool = [c for c in AD_CAMPAIGNS if c["id"] != exclude] or AD_CAMPAIGNS
+    if campaign_id:
+        for c in pool:
+            if c["id"] == campaign_id:
+                return c
+    total = sum(int(c.get("weight", 1)) for c in pool) or 1
+    x = random.random() * total
+    acc = 0
+    for c in pool:
+        acc += int(c.get("weight", 1))
+        if x <= acc:
+            return c
+    return pool[-1]
+
+
+async def api_ads_serve(request):
+    """Отдаёт клиенту кампанию для показа. Можно попросить конкретную (id)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data((body or {}).get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    try:
+        want = str((body or {}).get("id", "") or "")[:32]
+    except Exception:
+        want = ""
+    try:
+        last = str((body or {}).get("exclude", "") or "")[:32]
+    except Exception:
+        last = ""
+    c = _ad_pick(want or None, last or None)
+    if not c:
+        return web.json_response({"ok": False, "error": "no campaigns"})
+    d = load_store(); acc = acc_of(d, uid)
+    ads = d.setdefault("_ads", {})
+    shown = ads.setdefault(c["id"], {"shown": 0, "clicks": 0})
+    shown["shown"] = int(shown.get("shown", 0)) + 1
+    save_store(d)
+    return web.json_response({
+        "ok": True,
+        "ad": {
+            "id": c["id"], "title": c["title"], "text": c["text"],
+            "url": c["url"], "img": c.get("img") or AD_DEFAULT_IMG,
+        },
+    })
+
+
+async def api_ads_click(request):
+    """Игрок кликнул по рекламе — считаем переход по каждой кампании."""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    try:
+        cid = str(body.get("id", "") or "")[:32]
+    except Exception:
+        cid = ""
+    d = load_store(); acc = acc_of(d, uid)
+    ads = d.setdefault("_ads", {})
+    row = ads.setdefault(cid or "unknown", {"shown": 0, "clicks": 0})
+    row["clicks"] = int(row.get("clicks", 0)) + 1
+    acc.setdefault("ad_clicks", {})
+    acc["ad_clicks"][cid] = int(acc["ad_clicks"].get(cid, 0)) + 1
+    save_store(d)
+    return web.json_response({"ok": True})
 
 
 async def api_ad_reward(request):
@@ -3454,6 +3559,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/share/score", api_share_score)
     app.router.add_post("/api/channel/sub", api_channel_sub)
     app.router.add_post("/api/ad/reward", api_ad_reward)
+    app.router.add_post("/api/ads/serve", api_ads_serve)
+    app.router.add_post("/api/ads/click", api_ads_click)
     app.router.add_post("/api/cards", api_cards)
     app.router.add_post("/api/tourney", api_tourney)
     app.router.add_post("/api/contest", api_contest)

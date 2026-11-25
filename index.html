@@ -428,7 +428,11 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +15 🪙</button></div>
   <div id="adOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,2,16,.94);z-index:9999;align-items:center;justify-content:center;padding:18px;flex-direction:column">
    <div style="max-width:420px;width:100%">
-    <img id="adImg" src="house-ad.jpg" style="width:100%;border-radius:16px;display:block">
+    <div id="adClick" style="cursor:pointer;position:relative;border-radius:16px;overflow:hidden">
+     <img id="adImg" src="house-ad.jpg" style="width:100%;border-radius:16px;display:block">
+     <div id="adTitle" style="position:absolute;left:0;right:0;top:0;padding:9px 11px;background:linear-gradient(rgba(10,4,22,.9),transparent);font-size:13px;color:#ffe9a8;font-weight:800"></div>
+     <div id="adCta" style="position:absolute;left:0;right:0;bottom:0;padding:9px 11px;background:linear-gradient(transparent,rgba(10,4,22,.94));font-size:12px;color:#fff;font-weight:700">Открыть рекламу ↗</div>
+    </div>
     <div id="adCount" style="text-align:center;color:#ffe9a8;font-weight:800;margin-top:12px;font-size:16px">Реклама через 5…</div>
     <div id="adSub" style="text-align:center;color:#9fb6d4;font-size:12px;margin-top:5px">Досмотри до конца — получишь +15 🪙</div>
    </div>
@@ -590,7 +594,10 @@ var LOC=(function(){
       if(path==="/api/cards"){
         if(body.action==="state"){
           var items=[];for(var k in o.cardCounts){var pool=cardPool();for(var i=0;i<pool.length;i++){if(pool[i].id===k)items.push({id:k,text:pool[i].text,sub:pool[i].sub,rarity:pool[i].rarity,count:o.cardCounts[k]});}}
-          return Promise.resolve({ok:true,items:items,total:items.reduce(function(a,b){return a+b.count;},0),counts:o.cardCounts});
+          /* counts должны быть по редкости (common/rare/...), а не по id карты —
+             иначе клиент рисует «undefined undefined: 1» вместо легенды. */
+          var byRar={};items.forEach(function(it){byRar[it.rarity]=(byRar[it.rarity]||0)+it.count;});
+          return Promise.resolve({ok:true,items:items,total:items.reduce(function(a,b){return a+b.count;},0),counts:byRar});
         }
         if(body.action==="open"){
           if(o.coins<30)return Promise.resolve({ok:false,error:"not_enough_coins"});
@@ -606,6 +613,18 @@ var LOC=(function(){
         }
         save(o);return Promise.resolve({ok:true});
       }
+      /* Локальный режим: билета прогресса и рекламных кампаний на сервере нет,
+         поэтому отдаём правдоподобные данные — иначе в профиле «Уровень undefined». */
+      if(path==="/api/bp"){
+        var ob=st();
+        var bl=ob.bp||{coins:0,level:1,levels:[],claimed:[]};
+        return Promise.resolve({ok:true,coins:bl.coins||0,level:bl.level||1,max_level:7,levels:bl.levels||[],claimed:bl.claimed||[],to_next:0,next_name:"",skin:""});
+      }
+      if(path==="/api/ads/serve"){
+        /* Локально показываем карточку Mira — это рабочая рефералка. */
+        return Promise.resolve({ok:true,ad:{id:"mira",title:"Mira — ИИ, который тебя понимает",text:"Подключи Mira и получи +50 🪙",url:(typeof MIRA_REF_URL!=="undefined"?MIRA_REF_URL:"https://t.me/mira?start=ref_8684637509"),img:"house-ad.jpg"}});
+      }
+      if(path==="/api/ads/click"){ return Promise.resolve({ok:true}); }
       if(path==="/api/attack"){
         var o=st();
         var tgt=body.target||"";
@@ -998,7 +1017,7 @@ let curCombo=0,curMaxCombo=0;
 
 function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
-function seeded(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();return mulberry(k)}
+function seeded(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();return mulberry(k)()}
 function rnd(n){return Math.floor(rng()*n)}
 function filled(){const g=[];for(let r=0;r<N;r++){g.push([]);for(let c=0;c<N;c++)g[r].push(-1)}return g}
 function isSpecial(v){return v>=SPECIAL.BOMB&&v<=SPECIAL.FROST}
@@ -1505,9 +1524,48 @@ function initReferral(){
  try{checkPromoReturn();}catch(e){}
  /* Rewarded-реклама: +15 🪙 за просмотр, лимит 5 в день (лимит держит сервер). */
  var ad=$("adBtn"), adOv=$("adOverlay"), adCnt=$("adCount"), adSub=$("adSub"), adImg=$("adImg");
+ var adTitle=$("adTitle"), adCta=$("adCta"), adClick=$("adClick");
+ var adCur=null;          /* текущая кампания */
+ var adLastId="";         /* чтобы не показывать одну и ту же дважды подряд */
+ /* Открыть ссылку: в Telegram — через tg.openLink, в обычном браузере — новая вкладка. */
+ function adOpen(u){
+  var url=String(u||"");
+  if(!url) return false;
+  var ok=false;
+  try{ if(window.Telegram&&window.Telegram.WebApp&&typeof window.Telegram.WebApp.openLink==="function"){
+    window.Telegram.WebApp.openLink(url); ok=true;
+  }}catch(e){ ok=false; }
+  if(!ok){ try{ window.open(url,"_blank"); ok=true; }catch(e){} }
+  return ok;
+ }
+ /* Сервер отдаёт кампанию (ссылка, заголовок, картинка). Если он недоступен —
+    показываем запасной вариант, чтобы игрок никогда не видел пустую рекламу. */
+ async function loadAd(){
+  try{
+   var j=await api2("/api/ads/serve",{id:"",exclude:adLastId});
+   if(j&&j.ok&&j.ad&&j.ad.url){ adCur=j.ad; adLastId=j.ad.id; return j.ad; }
+  }catch(e){}
+  adCur={id:"mira",title:"Mira — ИИ, который тебя понимает",text:"Подключи Mira и получи +50 🪙",url:MIRA_REF_URL,img:"house-ad.jpg"};
+  return adCur;
+ }
+ function renderAd(a){
+  if(adImg&&a.img) adImg.src=a.img;
+  if(adTitle) adTitle.textContent=a.title||"";
+  if(adCta) adCta.textContent="Открыть рекламу ↗";
+ }
+ /* Клик по креативу: считаем переход и уводим по рефералке. */
+ if(adClick) adClick.onclick=function(){
+  if(!adCur) return;
+  adOpen(adCur.url);
+  try{ api2("/api/ads/click",{id:adCur.id}).catch(function(){}); }catch(e){}
+  try{ if(adCur.id==="mira") localStorage.setItem("pt_promo_left",String(Date.now())); }catch(e){}
+  toast("Открываем — спасибо за поддержку 🎁");
+ };
  /* Сначала показываем рекламу (5 сек), монеты начисляем ТОЛЬКО после просмотра. */
  async function showAd(){
   if(!adOv) return false;
+  var a=await loadAd();
+  renderAd(a);
   adOv.style.display="flex";
   var left=5;
   if(adCnt) adCnt.textContent="Реклама через "+left+"…";
@@ -1577,7 +1635,8 @@ try{window.addEventListener("pageshow",function(){ try{checkPromoReturn();}catch
 
 /* ---------- DAILY ---------- */
 function dailyIdx(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();
- return mulberry(k)}
+ /* mulberry возвращает ГЕНЕРАТОР — его надо вызвать, иначе индекс = NaN и TYPES[NaN] = undefined */
+ return mulberry(k)()}
 function drawDaily(){const r=dailyIdx();const w=$("dBoard");w.innerHTML="";
  const g=rngPick();g.forEach(t=>{const c=document.createElement("div");c.className="cell";c.textContent=t;w.appendChild(c)});
  $("dTitle").textContent="Челлендж дня 🏆";$("dText").textContent="Собери "+TYPES[r%TYPES.length]+" в ряд 3 раза. Одинаковая доска у всех."}
