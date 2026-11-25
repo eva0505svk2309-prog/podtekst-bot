@@ -1606,13 +1606,22 @@ async def api_share_score(request):
            f"А сколько подтекстов разгадаешь ты?\n"
            f"Играть: <a href=\"https://t.me/{BOT_USERNAME}\">@podtekst_game_bot</a>\n\n"
            f"❓ Сомневаешься в трактовке — кидай фразу в бота, разберём.")
+    # Реферальная ссылка приглашённого. Раньше шаринг отдавал ?start=src_share
+    # без payload — приглашённый НЕ засчитывался, виральный цикл был разорван.
+    ref_link = f"https://t.me/{BOT_USERNAME}?start=ref{uid}"
+    share_text = (f"Я набрал {streak} подряд в ПОДТЕКСТЕ — угадываю скрытый смысл "
+                  f"в обычных фразах. Сыграй так же: {ref_link}")
     try:
         await bot.send_message(CHAT_ID, txt, parse_mode="HTML",
                                disable_web_page_preview=True)
-        return web.json_response({"ok": True, "posted": True})
+        return web.json_response({"ok": True, "posted": True,
+                                  "link": ref_link, "text": share_text,
+                                  "streak": streak, "days": days})
     except Exception as e:
         logging.warning("share post failed: %s", e)
-        return web.json_response({"ok": True, "posted": False})
+        return web.json_response({"ok": True, "posted": False,
+                                  "link": ref_link, "text": share_text,
+                                  "streak": streak, "days": days})
 
 
 async def api_visit(request):
