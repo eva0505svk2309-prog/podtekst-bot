@@ -42,7 +42,7 @@ AD_CAMPAIGNS = [
         "id": "notwise",
         "title": "NOT Wise — твоя сова уже ждёт",
         "text": "Корми, качай и выигрывай в боях. Собери свою сову",
-        "url": os.environ.get("AD_NOTWISE_URL", "https://t.me/notwise_bot/thegame?startapp=afa8f47caa924ebe8a4933afa10a1d3c"),
+        "url": os.environ.get("AD_NOTWISE_URL", "https://t.me/notwise_bot/thegame?startapp=93f765f1a91a45abb0883ab11ba7cf17"),
         "img": "ad-notwise.jpg",
         "weight": 2,
     },
