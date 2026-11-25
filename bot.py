@@ -1986,7 +1986,13 @@ async def api_tourney(request):
     week = tourney_week()
     rows = []
     for k, acc in d.items():
+        # В хранилище лежат служебные списки (_promo, _attacks, _shares...),
+        # а не аккаунты. Без этой проверки acc.get() падал на списке -> 500.
+        if str(k).startswith("_") or not isinstance(acc, dict):
+            continue
         t = acc.get("tourney") or {}
+        if not isinstance(t, dict):
+            continue
         if t.get("week") != week:
             continue
         sc = int(t.get("score", 0))
