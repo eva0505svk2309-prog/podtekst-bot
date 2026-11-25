@@ -34,7 +34,7 @@ AD_CAMPAIGNS = [
         "id": "bums",
         "title": "Bums — игра про то, что он имел в виду",
         "text": "Ещё одна игра про подтексты. Открыть и забрать бонус",
-        "url": os.environ.get("AD_BUMS_URL", "https://t.me/bums_game_bot?start=ref_8684637509"),
+        "url": os.environ.get("AD_BUMS_URL", "https://t.me/bums/app?startapp=ref_8684637509"),
         "img": "ad-bums.jpg",
         "weight": 1,
     },
