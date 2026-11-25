@@ -579,15 +579,49 @@ var LOC=(function(){
   return {
     api:function(action,extra){
       var o=st();
+      /* Синхронизируем изменения, сделанные клиентом напрямую (S.coins, S.streak и т.п.),
+         иначе офлайн-прогресс терялся при перезагрузке страницы. */
+      function sync(){
+        if(typeof S!=="undefined"&&S){
+          if(typeof S.coins==="number")o.coins=S.coins;
+          if(typeof S.streak==="number")o.streak=S.streak;
+          if(typeof S.lives==="number")o.lives=S.lives;
+          if(typeof S.best==="number")o.best=S.best;
+          if(typeof S.lvl==="number")o.level=S.lvl;
+        }
+        return o;
+      }
+      /* Начисление очков сезонного билета (как на сервере). */
+      function bpAdd(pts){
+        if(!pts)return 0;
+        o.bp=o.bp||{coins:0,level:1,claimed:[]};
+        o.bp.coins=(o.bp.coins||0)+pts;
+        var LV=[0,500,1200,2500,4500,7000,10000],lv=1;
+        for(var i=0;i<LV.length;i++){if(o.bp.coins>=LV[i])lv=i+1;}
+        if(lv>(o.bp.level||1))o.bp.level=lv;
+        return o.bp.level;
+      }
       if(action==="daily"){
         var t=day();
         if(o.lastDay===t)return Promise.resolve({ok:false,coins:o.coins,lives:o.lives,streak:o.streak});
         var streak=1;if(o.lastDay===day()-1)streak=(o.streak||0)+1;
         o.lastDay=t;o.streak=streak;o.coins+=20+(streak%5===0?10:0);
-        o.days[t]=1;save(o);
+        o.days[t]=1;bpAdd(50);sync();save(o);
         return Promise.resolve({ok:true,coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level});
       }
-      save(o);return Promise.resolve({ok:true,coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level});
+      if(action==="spend"){
+        var amt=parseInt((extra&&extra.amount)||0,10)||0;
+        o.coins=Math.max(0,(o.coins||0)-amt);sync();save(o);
+        return Promise.resolve({ok:true,coins:o.coins});
+      }
+      if(action==="quiz"){
+        /* Верный ответ -> +30 очков сезонного билета (как на сервере). */
+        if(extra&&extra.good)bpAdd(30);
+        sync();save(o);
+        return Promise.resolve({ok:true,coins:o.coins,streak:o.streak});
+      }
+      sync();save(o);
+      return Promise.resolve({ok:true,coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level});
     },
     api2:function(path,body){
       var o=st();body=body||{};
@@ -795,7 +829,13 @@ var LOC=(function(){
         o.m3.level=extra.level||o.m3.level;o.m3.best=Math.max(o.m3.best,extra.score||0);
         o.m3.plays=extra.plays||o.m3.plays;o.m3.garland=extra.garland||o.m3.garland;
         o.m3.maxcombo=Math.max(o.m3.maxcombo,extra.maxcombo||0);o.m3.total=(o.m3.total||0)+(extra.score||0);
-        o.best=o.m3.best;o.level=o.m3.level;save(o);
+        o.best=o.m3.best;o.level=o.m3.level;
+        o.bp=o.bp||{coins:0,level:1,claimed:[]};
+        o.bp.coins=(o.bp.coins||0)+20;
+        var LV2=[0,500,1200,2500,4500,7000,10000],lv2=1;
+        for(var bi2=0;bi2<LV2.length;bi2++){if(o.bp.coins>=LV2[bi2])lv2=bi2+1;}
+        o.bp.level=lv2;
+        save(o);
         return Promise.resolve({ok:true,level:o.m3.level,coins:o.coins});
       }
       if(action==="profile"){
@@ -1095,7 +1135,15 @@ async function pick(k,btn){
     [...$("opts").children].forEach((b,i)=>{if(i===curQ.c)b.classList.add("ok");else if(i===k)b.classList.add("no");else b.disabled=true});
     if(good){S.coins+=10;S.streak++;$("qhint").textContent="✅ Верно! +10 🪙 · серия "+S.streak;}
     else{S.coins=Math.max(0,S.coins-5);S.streak=0;$("qhint").textContent="❌ Правильный: "+curQ.o[curQ.c]+" · −5 🪙"}
-    paint();return;
+    paint();
+    /* Офлайн: сохраняем прогресс и капаем очки сезонного билета (+30 за верный ответ).
+       Раньше монеты и серия жили только в памяти и терялись при перезагрузке. */
+    try{
+      await LOC.api("quiz",{good:good});
+      const bpj=await LOC.api2("/api/bp",{});
+      if(bpj&&typeof bpj.coins==="number"){try{BP.coins=bpj.coins;BP.level=bpj.level;bpRender();}catch(e){}}
+    }catch(e){}
+    return;
   }
   try{
     const r=await fetch(API+"/api/answer",{method:"POST",headers:{"Content-Type":"application/json"},
