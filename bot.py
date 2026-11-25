@@ -39,6 +39,14 @@ AD_CAMPAIGNS = [
         "weight": 1,
     },
     {
+        "id": "notwise",
+        "title": "NOT Wise — твоя сова уже ждёт",
+        "text": "Корми, качай и выигрывай в боях. Собери свою сову",
+        "url": os.environ.get("AD_NOTWISE_URL", "https://t.me/notwise_bot/thegame?startapp=afa8f47caa924ebe8a4933afa10a1d3c"),
+        "img": "ad-notwise.jpg",
+        "weight": 2,
+    },
+    {
         "id": "mira",
         "title": "Mira — ИИ, который тебя понимает",
         "text": "Твой персональный ИИ в Telegram. Подключи и получи +50 🪙",
