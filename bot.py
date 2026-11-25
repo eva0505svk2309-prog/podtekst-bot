@@ -792,6 +792,14 @@ QUIZ_BANK = [{"q": "Он написал «ок» в 23:41. Это значит�
 # иначе NameError при импорте и деплой падает.
 QUIZ_BANK = QUIZ_BANK + NY_QUESTIONS
 
+# Расширенные пули лежат отдельным модулем: bot.py и так уже большой,
+# а контент удобно править не трогая логику.
+try:
+    from quiz_pack import EXTRA_QUESTIONS, EXTRA_POSTS
+    QUIZ_BANK = QUIZ_BANK + EXTRA_QUESTIONS
+except Exception as _qp_e:  # noqa: BLE001
+    logging.warning("quiz_pack not loaded: %s", _qp_e)
+
 
 
 # ---------------- Mini App API: квиз (сервер проверяет ответы) ----------------
@@ -3133,6 +3141,16 @@ DAILY_POSTS = [
      "Хотите больше таких фраз? Играйте в ПОДТЕКСТ — каждый день новые."),
 ]
 
+# Дополняем пул постов из quiz_pack (если модуль загрузился выше).
+try:
+    _seen_posts = {p[0] for p in DAILY_POSTS}
+    for _p in EXTRA_POSTS:
+        if _p[0] not in _seen_posts:
+            DAILY_POSTS.append(_p)
+    logging.info("daily posts pool: %d", len(DAILY_POSTS))
+except Exception as _dp_e:  # noqa: BLE001
+    logging.warning("extra posts not loaded: %s", _dp_e)
+
 _poll_state = {}
 
 async def publish_daily_post():
@@ -3141,22 +3159,24 @@ async def publish_daily_post():
         return
     idx = int(time.time() // 86400) % len(DAILY_POSTS)
     question, options, answer, teaser = DAILY_POSTS[idx]
+    # Вариантов бывает 3 или 4 — рендерим столько, сколько есть в посте,
+    # и кнопок голосования столько же.
+    opt_lines = "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
+    nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+    vote_row = [InlineKeyboardButton(text=nums[i], callback_data=f"vote:{i+1}")
+                for i in range(len(options))]
     try:
         msg = await bot.send_message(
             chat_id=CHAT_ID,
             text=(f"\U0001F9E0 <b>Что он имел в виду?</b>\n\n"
                   f"{question}\n\n"
-                  f"1. {options[0]}\n"
-                  f"2. {options[1]}\n"
-                  f"3. {options[2]}\n\n"
+                  f"{opt_lines}\n\n"
                   f"\U0001F3AF Голосуйте, правильный ответ — в комментариях завтра.\n\n"
                   f"{teaser}\n\n"
                   f"\U0001F3AE <a href=\"https://t.me/podtekst_game_bot\">Играть: @podtekst_game_bot</a>"),
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="1️⃣", callback_data="vote:1"),
-                 InlineKeyboardButton(text="2️⃣", callback_data="vote:2"),
-                 InlineKeyboardButton(text="3️⃣", callback_data="vote:3")],
+                vote_row,
                 [InlineKeyboardButton(text="\U0001F3AE Играть", url=WEBAPP_URL)],
             ]))
         _poll_state["msg_id"] = msg.message_id
