@@ -3153,14 +3153,114 @@ except Exception as _dp_e:  # noqa: BLE001
 
 _poll_state = {}
 
+# ---------------- Голосование в постах канала ----------------
+# Раньше кнопки работали вхолостую: on_vote только отвечал "твой выбор".
+# Теперь считаем голоса в store ("_votes") и на следующий день публикуем
+# в канал разбор: верный вариант и реальный процент голосов.
+_ORD_WORDS = {
+    "первое": 0, "первый": 0, "первый вариант": 0, "вариант 1": 0, "первый ответ": 0,
+    "второе": 1, "второй": 1, "второй вариант": 1, "вариант 2": 1, "второй ответ": 1,
+    "третье": 2, "третий": 2, "третий вариант": 2, "вариант 3": 2, "третий ответ": 2,
+    "четвёртое": 3, "четвертое": 3, "четвёртый": 3, "четвертый": 3,
+    "четвёртый вариант": 3, "четвертый вариант": 3, "вариант 4": 3, "четвёртый ответ": 3,
+}
+
+
+def _correct_index(options, answer):
+    """Индекс правильного варианта по тексту разбора в посте.
+
+    Ответ в DAILY_POSTS написан словами ("Третье. ..."), поэтому ищем
+    самое длинное совпавшее порядковое слово. Если разбор вдруг сменит
+    формат — ищем текст ответа внутри варианта.
+    """
+    a = (answer or "").strip().lower()
+    if not a:
+        return None
+    best = None
+    for word, idx in _ORD_WORDS.items():
+        if word in a and (best is None or len(word) > len(best)):
+            best = word
+    if best is not None:
+        idx = _ORD_WORDS[best]
+        if 0 <= idx < len(options):
+            return idx
+    for i, o in enumerate(options):
+        if o.strip().lower() == a:
+            return i
+    return None
+
+
+def _votes_store():
+    """Все голоса по постам: {post_key: {"counts": [...], "meta": {...}}}."""
+    d = load_store()
+    v = d.setdefault("_votes", {})
+    return d, v
+
+def _post_key(question):
+    return hashlib.sha1(question.encode("utf-8")).hexdigest()[:12]
+
+async def publish_previous_answer():
+    """Опубликовать в канал разбор вчерашнего поста: ответ + статистика."""
+    if not CHAT_ID:
+        return
+    d, votes = _votes_store()
+    prev = votes.get("_last")
+    if not prev:
+        return
+    meta = prev.get("meta") or {}
+    q = meta.get("q")
+    options = meta.get("o") or []
+    correct = meta.get("c")
+    if q is None or correct is None or not options:
+        return
+    counts = [int(x) for x in (prev.get("counts") or [])]
+    while len(counts) < len(options):
+        counts.append(0)
+    total = sum(counts)
+    if total <= 0:
+        head = "⏳ Голосов почти не было — отвечаем по смыслу."
+    else:
+        pct = lambda i: int(round(counts[i] * 100.0 / total))
+        lines = "\n".join(
+            f"{'✅' if i == correct else '▫️'} {i+1}. {o} — {pct(i)}%"
+            for i, o in enumerate(options))
+        head = f"🏆 Правильный ответ — {correct+1}. {options[correct]}"
+        if counts[correct] == total:
+            head += "\n\nВсе угадали. Вот это понимание подтекста."
+    try:
+        await bot.send_message(
+            chat_id=CHAT_ID,
+            text=(f"\U0001F3C6 <b>Разбор поста</b>\n\n"
+                  f"«{q}»\n\n"
+                  f"{head}\n\n{lines}\n\n"
+                  f"\U0001F3AF Голосов: {total}. "
+                  f"Хочешь больше таких? \U0001F3AE <a href=\"https://t.me/podtekst_game_bot\">Играть: @podtekst_game_bot</a>"),
+            parse_mode="HTML")
+        logging.info("previous answer published, votes=%d", total)
+    except Exception as e:
+        logging.warning("publish_previous_answer failed: %s", e)
+    finally:
+        votes.pop("_last", None)
+        save_store(d)
+
 async def publish_daily_post():
     """Публикует ежедневный пост-разбор фразы с голосованием в канале."""
     if not CHAT_ID:
         return
     idx = int(time.time() // 86400) % len(DAILY_POSTS)
     question, options, answer, teaser = DAILY_POSTS[idx]
+    # Сначала закрываем вчерашний пост разбором, иначе голоса потеряются.
+    try:
+        await publish_previous_answer()
+    except Exception as e:
+        logging.warning("publish_previous_answer failed: %s", e)
     # Вариантов бывает 3 или 4 — рендерим столько, сколько есть в посте,
     # и кнопок голосования столько же.
+    # Верный вариант в DAILY_POSTS задан текстом разбора ("Третье. ...").
+    # Разбираем порядковое слово — иначе канал врал бы в разборе.
+    correct_idx = _correct_index(options, answer)
+    if correct_idx is None:
+        correct_idx = 0
     opt_lines = "\n".join(f"{i+1}. {o}" for i, o in enumerate(options))
     nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
     vote_row = [InlineKeyboardButton(text=nums[i], callback_data=f"vote:{i+1}")
@@ -3180,6 +3280,10 @@ async def publish_daily_post():
                 [InlineKeyboardButton(text="\U0001F3AE Играть", url=WEBAPP_URL)],
             ]))
         _poll_state["msg_id"] = msg.message_id
+        d, votes = _votes_store()
+        votes["_last"] = {"meta": {"q": question, "o": list(options), "c": correct_idx},
+                          "counts": []}
+        save_store(d)
         logging.info("daily post published: %s", msg.message_id)
     except Exception as e:
         logging.warning("publish_daily_post failed: %s", e)
@@ -3210,7 +3314,26 @@ async def on_vote(call: types.CallbackQuery):
         return
     choice = call.data.split(":")[1]
     try:
-        await call.answer(f"\U0001F3AF Твой выбор: {choice}. Ответ завтра в канале!", show_alert=False)
+        idx = int(choice) - 1
+    except Exception:
+        return
+    d, votes = _votes_store()
+    last = votes.get("_last") or {}
+    counts = [int(x) for x in (last.get("counts") or [])]
+    meta = last.get("meta") or {}
+    n_opts = len(meta.get("o") or []) or 3
+    while len(counts) < n_opts:
+        counts.append(0)
+    if not (0 <= idx < n_opts):
+        return
+    counts[idx] += 1
+    last["counts"] = counts
+    votes["_last"] = last
+    save_store(d)
+    total = sum(counts)
+    try:
+        await call.answer(f"\U0001F3AF Твой выбор: {choice}. Ответ завтра в канале! "
+                          f"(\u0421\u0435\u0439\u0447\u0430\u0441: {total})", show_alert=False)
     except Exception as e:
         logging.warning("on_vote failed: %s", e)
 
