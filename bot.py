@@ -131,6 +131,13 @@ async def start(message: types.Message):
     if payload == "ref":
         await referral(message)
         return
+    # Приглашение в дуэль: t.me/<bot>?start=duel_<код>.
+    # Гость жмёт "Принять вызов" — и мы регистрируем его в бою.
+    if payload.startswith("duel_"):
+        code = payload[5:].strip()
+        ok, txt = await accept_duel_invite(message, code)
+        await message.answer(txt, parse_mode="HTML")
+        return
     # Старые рекламные посты вели на /play — открываем игру, а не просто текст.
     # Telegram не даёт web_app-кнопки в постах канала, поэтому реклама всегда
     # ведёт в личку с ботом, и уже бот открывает Mini App с меткой источника.
@@ -556,6 +563,9 @@ def track_source(parts, body_source=""):
         raw = str(body_source or "")
     if raw:
         raw = raw.strip()
+        # Метка приглашения в дуэль — не рекламный источник, в статистику не идёт.
+        if raw.startswith("duel_"):
+            return "direct"
         if raw.startswith("ch_"):
             src = raw[:40]
         elif raw:
@@ -2809,6 +2819,96 @@ def duel_targets(d, uid):
     return rows[:20]
 
 
+
+# ---------------- Приглашения в дуэль (PvP через Telegram-чат) -------------
+# Идея: игрок жмёт "вызвать друга" -> бот пишет другу сообщение со ссылкой
+# вида t.me/<bot>?start=duel_<код>. Друг открывает Mini App с этой меткой,
+# принимает вызов, и оба играют один набор вопросов каждый со своей
+# стороны. Когда оба ответили — сервер сверяет результаты.
+INVITE_TTL = 3600 * 24        # приглашение живёт сутки
+
+
+def _pvp_public(pvp):
+    """PvP без технических полей — то, что отдаём клиенту."""
+    return {"code": pvp.get("code"), "status": pvp.get("status", "playing"),
+            "winner": pvp.get("winner"),
+            "host": {"name": pvp["host"]["name"], "score": pvp["host"]["score"],
+                     "done": pvp["host"]["done"]},
+            "guest": {"name": pvp["guest"]["name"], "score": pvp["guest"]["score"],
+                      "done": pvp["guest"]["done"]},
+            "qs": pvp.get("qs", [])}
+
+
+def _invites(d):
+    return d.setdefault("_invites", {})
+
+
+def _invite_code():
+    return "d" + os.urandom(5).hex()
+
+
+def _pvp_store(d):
+    return d.setdefault("_pvp", {})
+
+
+async def accept_duel_invite(message, code):
+    """Гость принимает вызов по коду из ссылки. Возвращает (ok, текст)."""
+    d = load_store()
+    inv = _invites(d).get(code)
+    if not inv:
+        return False, ("\U0001F614 Это приглашение больше не действует. "
+                       "Попроси друга вызвать тебя ещё раз.")
+    if int(time.time()) - int(inv.get("ts", 0)) > INVITE_TTL:
+        return False, "\U0001F614 Приглашение протухло (оно живёт сутки)."
+    uid = message.from_user.id
+    if str(inv.get("host")) == str(uid):
+        return False, "\U0001F610 Это твой собственный вызов. Вызови друга."
+    acc = acc_of(d, uid)
+    p = pet_acc(acc)
+    if not p.get("species"):
+        return False, ("\U0001F422 Сначала вылупи питомца — иначе в бою у тебя "
+                       "не будет силы.")
+    pvp = _pvp_store(d)
+    if code not in pvp:
+        pvp[code] = {"code": code,
+                     "host": {"uid": str(inv.get("host")),
+                              "name": inv.get("host_name", "Игрок"),
+                              "score": 0, "done": False, "answers": []},
+                     "guest": {"uid": str(uid),
+                               "name": acc.get("name") or (message.from_user.first_name or "Игрок"),
+                               "score": 0, "done": False, "answers": []},
+                     "qs": _duel_questions(), "ts": int(time.time()),
+                     "status": "playing"}
+    _invites(d).pop(code, None)
+    save_store(d)
+    host_name = inv.get("host_name", "Игрок")
+    return True, ("\U0001F94D <b>Вызов принят!</b>\n\n"
+                  f"Ты играешь против {host_name}. 5 вопросов, "
+                  "кто больше угадает — тот победил.\n\n"
+                  f"\U0001F3AE <a href=\"{WEBAPP_URL}?startapp=duel_{code}\">Начать дуэль</a>")
+
+
+def _pvp_summary(pvp):
+    """Готов ли бой к подведению итогов: оба ответили."""
+    return all(pvp.get(k, {}).get("done") for k in ("host", "guest"))
+
+
+async def _send_invite_to_friend(friend_username, code, host_name):
+    """Написать другу приглашение от имени бота."""
+    link = f"https://t.me/{BOT_USERNAME}?start=duel_{code}"
+    text = ("\U0001F94D <b>Вызов в дуэль!</b>\n\n"
+            f"{host_name} вызывает тебя сыграть в ПОДТЕКСТ на равных.\n"
+            "5 вопросов, кто больше угадает подтекстов — тот победил.\n\n"
+            f"\U0001F3AE <a href=\"{link}\">Принять вызов</a>")
+    try:
+        await bot.send_message(chat_id=f"@{friend_username}", text=text,
+                               parse_mode="HTML")
+        return True
+    except Exception as e:
+        logging.warning("send invite failed: %s", e)
+        return False
+
+
 async def api_duel(request):
     """Дуэль: подготовка боя, ответы и разбор. Всё считает сервер."""
     try:
@@ -2826,6 +2926,127 @@ async def api_duel(request):
     d = load_store(); acc = acc_of(d, uid)
     x = duel_acc(acc)
     p = pet_acc(acc); pet_decay(p)
+
+    if action == "invite":
+        friend = str(body.get("friend", "")).strip().lstrip("@")
+        if not friend or len(friend) > 32:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "bad friend"})
+        if not p.get("species"):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not hatched",
+                                      "msg": "Сначала вылупи питомца"})
+        if _duel_ticket_count(acc) < DUEL_TICKETS:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not enough tickets",
+                                      "tickets": _duel_ticket_count(acc)})
+        d2 = load_store()
+        code = _invite_code()
+        host = acc.get("name") or "Игрок"
+        _invites(d2)[code] = {"host": str(uid), "host_name": host,
+                              "friend": friend, "ts": int(time.time())}
+        save_store(d2)
+        sent = await _send_invite_to_friend(friend, code, host)
+        if not sent:
+            # приглашение не ушло — не жжём билет, чистим запись
+            d2 = load_store()
+            _invites(d2).pop(code, None)
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "cannot send invite",
+                                      "msg": "Не удалось написать. Проверь, что юзернейм верный и он не заблокировал бота."})
+        _duel_spend_ticket(acc)
+        save_store(d)
+        return web.json_response({"ok": True, "code": code, "friend": friend,
+                                  "tickets": _duel_ticket_count(acc)})
+
+    if action == "accept":
+        code = str(body.get("code", "")).strip()
+        d2 = load_store()
+        inv = _invites(d2).get(code)
+        if not inv:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "invite not found"})
+        if int(time.time()) - int(inv.get("ts", 0)) > INVITE_TTL:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "invite expired"})
+        if str(inv.get("host")) == str(uid):
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "self invite"})
+        if not p.get("species"):
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "not hatched",
+                                      "msg": "Сначала вылупи питомца"})
+        # бой начинаем один раз: гость вступает — создаём общий набор вопросов
+        pvp = _pvp_store(d2)
+        if code not in pvp:
+            pvp[code] = {"code": code,
+                         "host": {"uid": str(inv.get("host")),
+                                  "name": inv.get("host_name", "Игрок"),
+                                  "score": 0, "done": False, "answers": []},
+                         "guest": {"uid": str(uid),
+                                   "name": acc.get("name") or "Игрок",
+                                   "score": 0, "done": False, "answers": []},
+                         "qs": _duel_questions(), "ts": int(time.time()),
+                         "status": "playing"}
+        _invites(d2).pop(code, None)
+        save_store(d2)
+        return web.json_response({"ok": True, "pvp": _pvp_public(pvp[code])})
+
+    if action == "pvp_state":
+        code = str(body.get("code", "")).strip()
+        d2 = load_store()
+        pvp = _pvp_store(d2).get(code)
+        if not pvp:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "no pvp"})
+        return web.json_response({"ok": True, "pvp": _pvp_public(pvp)})
+
+    if action == "pvp_answer":
+        code = str(body.get("code", "")).strip()
+        try:
+            qid = int(body.get("id", -1))
+            chosen = int(body.get("choice", -1))
+        except Exception:
+            return web.json_response({"ok": False, "error": "bad params"}, status=400)
+        d2 = load_store()
+        pvp = _pvp_store(d2).get(code)
+        if not pvp:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "no pvp"})
+        side = "host" if str(pvp["host"]["uid"]) == str(uid) else (
+            "guest" if str(pvp["guest"]["uid"]) == str(uid) else None)
+        if side is None:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "not participant"})
+        if pvp.get("status") != "playing":
+            save_store(d2)
+            return web.json_response({"ok": True, "pvp": _pvp_public(pvp)})
+        if qid < 0 or qid >= len(QUIZ_BANK):
+            return web.json_response({"ok": False, "error": "bad question"}, status=400)
+        # Вопрос должен быть из набора именно этого боя — иначе можно было бы
+        # набивать очки чужими вопросами.
+        if qid not in {int(q.get("id")) for q in (pvp.get("qs") or [])}:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "question not in this match"})
+        q = QUIZ_BANK[qid]
+        if chosen < 0 or chosen >= len(q["o"]):
+            return web.json_response({"ok": False, "error": "bad choice"}, status=400)
+        done_ids = {int(a.get("id")) for a in pvp[side].get("answers", [])}
+        if qid in done_ids:
+            save_store(d2)
+            return web.json_response({"ok": False, "error": "already answered"})
+        ok = (chosen == int(q["c"]))
+        pvp[side]["answers"].append({"id": qid, "choice": chosen, "ok": ok})
+        if ok:
+            pvp[side]["score"] = int(pvp[side].get("score", 0)) + 1
+        if len(pvp[side]["answers"]) >= len(pvp.get("qs") or []):
+            pvp[side]["done"] = True
+        if _pvp_summary(pvp):
+            pvp["status"] = "finished"
+            pvp["winner"] = ("host" if int(pvp["host"]["score"]) >= int(pvp["guest"]["score"])
+                             else "guest")
+        save_store(d2)
+        return web.json_response({"ok": True, "pvp": _pvp_public(pvp)})
 
     if action == "state":
         save_store(d)
