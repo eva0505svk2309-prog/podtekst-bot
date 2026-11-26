@@ -1814,9 +1814,45 @@ def gift_catalog_clean():
     return out
 
 
+def gift_liquidity_view():
+    """Витрина ликвидности: во что реально превращаются осколки игрока.
+
+    Показываем три выхода из осколков, и для каждого — честную цифру:
+      1) Telegram-подарок напрямую (цена в осколках) — гарантированный выход,
+         но осколки надо копить, и обмен открыт только 1-7 числа месяца;
+      2) конвертация подарка в Stars (85% номинала) — Telegram удерживает 15%;
+      3) продажа коллекционного подарка за GRAM на маркетплейсе — цена
+         плавает, поэтому показываем не «цену», а диапазон рынка и честно
+         говорим, что точной цены за этот подарок мы не знаем.
+
+    Диапазон GRAM — общий по рынку, а не котировка конкретного подарка.
+    Придумывать цену за конкретный подарок нельзя: игрок примет её за
+    гарантию и потом получит меньше.
+    """
+    m = gram_market() or {}
+    rows = []
+    for gid, (emo, name, stars, _shards) in GIFT_CATALOG.items():
+        units = price_units(stars)
+        conv = int(round(stars * GIFT_CONVERT_RATE))
+        rows.append({
+            "id": gid, "emoji": emo, "name": name, "stars": stars,
+            "price_units": units,
+            "price_shards": round(units / STAR_PACK, 2),
+            "convert_stars": conv,
+            "convert_shards": round(conv * STAR_PACK / STAR_PACK, 2),
+            "market_gram": {"min": m.get("min_gram"), "median": m.get("median_gram"),
+                            "max": m.get("max_gram"), "date": m.get("date"),
+                            "count": m.get("count")},
+            "exit": "85% в Stars" if stars <= 50 else "выгоднее за GRAM",
+        })
+    rows.sort(key=lambda x: x["stars"])
+    return rows
+
+
 async def api_gifts_public(request):
     """Публичная витрина подарков. Без init_data — для рекламных сетей."""
     return web.json_response({"ok": True, "gifts": gift_catalog_clean(),
+                              "liquidity": gift_liquidity_view(),
                               "convert_rate": GIFT_CONVERT_RATE,
                               "market": gram_market()})
 
@@ -1917,6 +1953,26 @@ async def api_fall_boost(request):
     return web.json_response({"ok": True, "sent": True, "pack": "fall_boost"})
 
 
+async def api_sub_buy(request):
+    """Покупка подписки ПОДТЕКСТ+ за Stars — отправляем инвойс бота."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data((body or {}).get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    tier = (body or {}).get("tier") or ""
+    if tier not in SUBSCRIPTION_TIERS:
+        return web.json_response({"error": "unknown tier"}, status=400)
+    await send_invoice(uid, tier, uid)
+    return web.json_response({"ok": True, "sent": True, "tier": tier,
+                              "stars": SUBSCRIPTION_TIERS[tier][0]})
+
+
 TERMS_VERSION = "1.0"
 
 TERMS_TEXT = {
@@ -1926,8 +1982,9 @@ TERMS_TEXT = {
         {"title": "1. Что такое ПОДТЕКСТ",
          "body": "Это бесплатная игра-викторина в Telegram. Игровые предметы (монеты, осколки, "
                  "питомец, карточки) не имеют реальной денежной стоимости и не могут быть "
-                 "обменяны на деньги вне игры. Единственное, что можно приобрести за реальные "
-                 "Telegram Stars, — пакет «Звездопад+», билеты в розыгрыш и подписка на канал."},
+                 "обменяны на деньги вне игры. За реальные Telegram Stars в игре "
+                 "приобретаются: пакет «Звездопад+», билеты в розыгрыш, пакеты монет, "
+                 "жизни, вечное отключение рекламы и подписка ПОДТЕКСТ+."},
         {"title": "2. Покупки в Telegram Stars",
          "body": "Все покупки совершаются через официальный платёж Telegram Stars. "
                  "Транзакции необратимы: возврат Stars через Telegram не предусмотрен, "
@@ -4931,7 +4988,9 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/wallet", api_wallet)
     app.router.add_post("/api/stars", api_stars)
     app.router.add_post("/api/sub", api_sub)
+    app.router.add_post("/api/sub/buy", api_sub_buy)
     app.router.add_get("/api/gifts/public", api_gifts_public)
+    app.router.add_get("/api/gifts/liquidity", api_gifts_public)
     app.router.add_post("/api/stars/gift", api_gift_buy)
     app.router.add_post("/api/stars/boost", api_fall_boost)
     app.router.add_post("/api/action", api_action)
