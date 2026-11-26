@@ -830,23 +830,41 @@ def get_biz_conn(user_id):
 
 @dp.business_connection()
 async def on_business_connection(event):
-    """Telegram прислал бизнес-подключение: сохраняем его id."""
-    bc = event.business_connection
-    rights = bc.rights
+    """Telegram прислал бизнес-подключение: сохраняем его id.
+
+    В aiogram 3.x в dp.business_connection() приходит сам объект
+    BusinessConnection (не обёртка Update), поэтому берём поля прямо из event.
+    """
+    bc = getattr(event, "business_connection", None) or event
+    try:
+        rights = bc.rights
+    except Exception:
+        rights = None
     can_transfer = False
+    can_reply = False
     try:
         can_transfer = bool(rights.can_transfer_stars) if rights else False
-    except Exception:
-        can_transfer = False
-    save_biz_conn(bc.user.id, bc.id, {"can_transfer_stars": can_transfer})
-    logging.info("BUSINESS_CONN user=%s id=%s can_transfer=%s",
-                 bc.user.id, bc.id, can_transfer)
-    try:
-        await event.answer(
-            "Бизнес-подключение принято. Теперь перевести звёзды можно командой /transferstars.",
-            reply_markup=kb())
+        can_reply = bool(rights.can_reply) if rights else False
     except Exception:
         pass
+    try:
+        uid = bc.user.id
+        conn_id = bc.id
+    except Exception:
+        logging.exception("business_connection: bad payload")
+        return
+    save_biz_conn(uid, conn_id, {"can_transfer_stars": can_transfer,
+                                 "can_reply": can_reply,
+                                 "is_enabled": bool(getattr(bc, "is_enabled", True))})
+    logging.info("BUSINESS_CONN user=%s id=%s can_transfer=%s can_reply=%s",
+                 uid, conn_id, can_transfer, can_reply)
+    try:
+        await bot.send_message(uid,
+            "Бизнес-подключение принято ✅\n"
+            "Перевести звёзды: /transferstars 500\n"
+            "Проверить баланс: /starbalance")
+    except Exception:
+        logging.warning("business_connection: notify failed", exc_info=True)
 
 
 @dp.message(Command("transferstars"))
