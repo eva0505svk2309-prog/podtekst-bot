@@ -18,7 +18,7 @@ header{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .logo span{background:linear-gradient(90deg,#ff4d8d,#a86bff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .pill{background:#25153f;border:1px solid #4a2f86;border-radius:999px;padding:6px 11px;font-weight:700;font-size:14px}
 .card{background:linear-gradient(160deg,#1e1134,#150c26);border:1px solid #3b2a63;border-radius:16px;padding:12px}
-.tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;background:#1c1030;padding:6px;border-radius:14px}
+.tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;background:#1c1030;padding:6px;border-radius:14px}
 .tabs button{min-width:0;background:transparent;border:0;color:#a894d4;font-weight:800;font-size:13px;line-height:1.25;padding:10px 4px;border-radius:11px;cursor:pointer;white-space:normal;overflow-wrap:anywhere}
 .tabs .nyflag,.tabs #newBadge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:7px;background:#ff4d8d;color:#fff;margin-left:3px;line-height:1.5}
 .tabs button.on{background:linear-gradient(135deg,#ff4d8d,#a86bff);color:#fff}
@@ -251,6 +251,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <button data-v="cards">🃏 Коллекция<span id="newBadge">NEW</span></button>
   <button data-v="pet">🐾 Питомец</button>
   <button data-v="stars">✨ Звёзды</button>
+  <button data-v="terms">📄 Условия</button>
   <button data-v="profile">👤 Профиль</button>
 </div>
 
@@ -361,6 +362,12 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="petHint" class="small" style="text-align:center;margin-top:8px"></div>
  </div>
  <div class="card" style="margin-bottom:10px">
+  <div style="font-weight:800;margin-bottom:8px">⬆️ Прокачка стадии</div>
+  <div class="small" style="margin-bottom:9px">Расти питомца за осколки: каждая стадия даёт +щит и заметно бьёт в дуэлях. Осколки — общая валюта игры, их капает и за квиз, и за «Три в ряд», и из общего пула.</div>
+  <div id="petStageUp" class="small"></div>
+  <button id="petStageUpBtn" class="pri" style="width:100%;margin-top:9px;display:none">⬆️ Прокачать стадию</button>
+ </div>
+ <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">⚔️ Дуэли — бой с «тенью»</div>
   <div class="small" style="margin-bottom:8px">Сопернику не нужно быть онлайн: сервер помнит его прошлый результат. Ставка — билет конкурса, за победу — 2 билета.</div>
   <div id="duelBox"><div class="small">Загрузка…</div></div>
@@ -404,15 +411,6 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="starFallBox" style="font-size:13px;color:#9fb6d4;margin-bottom:6px"></div>
   <div id="starChance" style="font-size:13px;color:#9fb6d4"></div>
  </div>
- <div class="card" style="margin-bottom:10px" id="freezeCard">
-  <div style="font-weight:800;margin-bottom:8px">❄️ Заморозка серии</div>
-  <div id="freezeState" style="font-size:13px;color:#9fb6d4;margin-bottom:8px"></div>
-  <div class="row" style="gap:8px;flex-wrap:wrap">
-   <button id="freezeShardsBtn" class="pri" style="flex:1">Докупить за осколки</button>
-   <button id="freezeStarsBtn" style="white-space:nowrap">За 50 ⭐</button>
-  </div>
-  <div class="small" style="margin-top:7px">Заморозка пропускает ровно один день и не обнуляет серию. Раз в неделю — бесплатная, ещё можно докупить за 100 осколков или 50 Stars.</div>
- </div>
  <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">🎁 Витрина подарков</div>
   <div id="starGiftNote" class="small" style="margin-bottom:8px"></div>
@@ -420,13 +418,49 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
  </div>
  <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">🌠 Звездопад</div>
-  <div id="fallText" class="small" style="margin-bottom:9px"></div>
+  <div id="fallText" class="small" style="margin-bottom:6px"></div>
+  <div id="poolInfo" class="small" style="margin-bottom:9px"></div>
   <button id="boostBtn" class="pri" style="width:100%">Купить «Звездопад+»</button>
-  <div id="boostNote" class="small" style="margin-top:7px"></div>
+  <button id="starsTermsBtn" style="width:100%;margin-top:8px">📄 Условия и правила пула</button>
+ </div>
+ <div class="card" style="margin-bottom:10px">
+  <div style="font-weight:800;margin-bottom:8px">❄️ Заморозка серии</div>
+  <div id="freezeBox" class="small" style="margin-bottom:9px">Загрузка…</div>
+  <button id="freezeBuyShards" class="pri" style="width:100%;display:none">❄️ Докупить заморозку за 100 ✨ (1 ⭐)</button>
+  <button id="freezeBuyStars" style="width:100%;margin-top:8px;display:none">❄️ Купить заморозку за 50 ⭐</button>
  </div>
  <div class="card">
   <div style="font-weight:800;margin-bottom:6px">Как это работает</div>
-  <div class="small">За серию в квизе и за пройденный уровень «Три в ряд» падают осколки. 10 осколков = 1 звезда. Осколки обмениваются на Telegram-подарки в начале месяца, а бустер «Звездопад+» временно повышает шанс дропа.</div>
+  <div class="small">За серию в квизе и за пройденный уровень «Три в ряд» падают осколки. 10 осколков = 1 звезда. Осколки обмениваются на Telegram-подарки с 1-го по 7-е число месяца. Бустер «Звездопад+» — это взнос в общий пул осколков: он поднимает твой шанс и финансирует раздачу другим активным игрокам. Подробности — в разделе «Условия».</div>
+ </div>
+</section>
+
+<!-- TERMS -->
+<section class="view" id="v-terms">
+ <div class="card">
+  <div style="font-weight:800;font-size:15px;margin-bottom:6px">📄 Условия использования</div>
+  <div class="small" id="termsVersion" style="margin-bottom:9px"></div>
+  <div id="termsBody" style="font-size:13px;line-height:1.55;color:#d7e5f8"></div>
+ </div>
+ <div class="card">
+  <label style="display:flex;gap:9px;align-items:flex-start;font-size:13px;cursor:pointer">
+   <input type="checkbox" id="termsAccept" style="margin-top:2px;width:17px;height:17px;flex-shrink:0">
+   <span>Я ознакомился(ась) с условиями игры, понимаю, что покупки за Telegram Stars необратимы, и принимаю их.</span>
+  </label>
+  <button id="termsSave" class="pri" style="width:100%;margin-top:10px">Принять условия</button>
+  <div class="small" id="termsStatus" style="margin-top:7px"></div>
+ </div>
+ <div class="card">
+  <div style="font-weight:800;font-size:14px;margin-bottom:6px">Как работает пул осколков</div>
+  <div class="small">
+   Покупка «Звездопад+» — это взнос в общий пул осколков, а не просто увеличение шанса.
+   <br><br>• <b style="color:#ffd76a">70%</b> взноса распределяется между активными игроками — пропорционально их активности, но всё равно с рандомом: больше нажал — выше шанс, но не гарантия.
+   <br>• <b style="color:#7ee787">30%</b> остаётся проекту.
+   <br>• Купивший пакет может получить из пула не больше <b>166%</b> от своего взноса: потратив 200 Stars, максимум 333 осколками. Излишек возвращается в пул и достаётся другим игрокам.
+   <br>• Покупателю дополнительно возвращается гарантированно <b style="color:#ffd76a">35%</b> взноса осколками.
+   <br>• Осколки выпадают случайно — точное количество никто не гарантирует.
+   <br><br>Фарм без бустера долгий — и это нормально: в любой этаповке фарм всегда занимает время.
+  </div>
  </div>
 </section>
 
@@ -452,7 +486,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    </div>
    <div id="refStat" style="font-size:13px;color:#9fb6d4;margin-top:8px">
  <div id="refCoupon" class="small" style="display:none;margin-top:6px;color:#ffd76e"></div>Приглашено: 0 · до бонуса +100 🪙 осталось 3</div>
-   <div class="small" style="margin-top:6px">Друг пришёл → тебе +50 🪙 и 1 ⭐ осколков, ему 0.5 ⭐. Каждые 3 друга — ещё +100 🪙, +0.5 ⭐ и +1 💗. Осколки не копятся больше 3 ⭐ в сутки.</div>
+   <div class="small" style="margin-top:6px">Друг пришёл → тебе +1 ⭐ осколками и +50 🪙, ему +0.5 ⭐. Каждые 3 друга — ещё +100 🪙, +0.5 ⭐ и +1 💗. Активация друга (3 квиза) даёт +100 🪙 и +0.5 ⭐.</div>
   </div>
  </div>
  <div class="card" style="margin-bottom:10px" id="promoCard">
@@ -463,7 +497,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    <button id="promoClaim" style="white-space:nowrap">+50 🪙</button>
   </div>
   <div class="small" style="margin-top:7px" id="promoNote">Бонус придёт сам, как только вернёшься в игру. Один раз.</div>
-  <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +25 🪙</button></div>
+  <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +25 🪙 и +0.3 ⭐</button></div>
   <div id="adOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,2,16,.94);z-index:9999;align-items:center;justify-content:center;padding:18px;flex-direction:column">
    <div style="max-width:420px;width:100%">
     <div id="adClick" style="cursor:pointer;position:relative;border-radius:16px;overflow:hidden">
@@ -675,17 +709,17 @@ var LOC=(function(){
       /* Офлайн-режим: звёзды и подарки работают локально, без сервера. */
       if(path==="/api/stars"){
         var gifts=[
-          {id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:188},
-          {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:188},
-          {id:"g3",emoji:"🎁",name:"Коробка с бантом",stars:25,price:313},
-          {id:"g4",emoji:"🌹",name:"Красная роза",stars:25,price:313},
-          {id:"g5",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
-          {id:"g6",emoji:"💐",name:"Букет",stars:50,price:625},
-          {id:"g7",emoji:"🚀",name:"Ракета",stars:50,price:625},
-          {id:"g8",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
-          {id:"g9",emoji:"🏆",name:"Кубок",stars:100,price:1250},
-          {id:"g10",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
-          {id:"g11",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
+          {id:"5170145012310081615",emoji:"💝",name:"Сердце с бантом",stars:15,price:190},
+          {id:"5170233102089322756",emoji:"🧸",name:"Мишка",stars:15,price:190},
+          {id:"5170250947678437525",emoji:"🎁",name:"Коробка с бантом",stars:25,price:310},
+          {id:"5168103777563050263",emoji:"🌹",name:"Красная роза",stars:25,price:310},
+          {id:"5170144170496491616",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
+          {id:"5170314324215857265",emoji:"💐",name:"Букет",stars:50,price:625},
+          {id:"5170564780938756245",emoji:"🚀",name:"Ракета",stars:50,price:625},
+          {id:"6028601630662853006",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
+          {id:"5168043875654172773",emoji:"🏆",name:"Кубок",stars:100,price:1250},
+          {id:"5170690322832818290",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
+          {id:"5170521118301225164",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
         var today=new Date();var wd=today.getDay();
         var fallOpen=(wd===5&&today.getHours()>=18)||wd===6||wd===0;
         var giftOpen=today.getDate()<=7;
@@ -694,23 +728,23 @@ var LOC=(function(){
         return Promise.resolve({ok:true,shards:o.shards,stars:Math.round(o.shards/10*100)/100,
           fall_open:fallOpen,fall_next:fallOpen?"сейчас":"в пятницу",gift_open:giftOpen,
           gift_next:giftOpen?"сегодня":"в начале следующего месяца",boost_until:0,
-          chance:Math.round(chance*1000)/1000,gifts:gifts,
           boost_price:200,contributed:0,pool_earned:0,pool_cap:0,
-          pool:{distributable:0,stars:0,active:0,margin_pct:30,cap_mult:2}});
+          pool:{distributable:0,stars:0,active:0,margin_pct:30,cap_mult:1.667},
+          chance:Math.round(chance*1000)/1000,gifts:gifts});
       }
       if(path==="/api/stars/gift"){
         var gid=body.gift_id;var g2=null;
-        var gl=[{id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:188},
-                {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:188},
-                {id:"g3",emoji:"🎁",name:"Коробка с бантом",stars:25,price:313},
-                {id:"g4",emoji:"🌹",name:"Красная роза",stars:25,price:313},
-                {id:"g5",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
-                {id:"g6",emoji:"💐",name:"Букет",stars:50,price:625},
-                {id:"g7",emoji:"🚀",name:"Ракета",stars:50,price:625},
-                {id:"g8",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
-                {id:"g9",emoji:"🏆",name:"Кубок",stars:100,price:1250},
-                {id:"g10",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
-                {id:"g11",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
+        var gl=[{id:"5170145012310081615",emoji:"💝",name:"Сердце с бантом",stars:15,price:190},
+                {id:"5170233102089322756",emoji:"🧸",name:"Мишка",stars:15,price:190},
+                {id:"5170250947678437525",emoji:"🎁",name:"Коробка с бантом",stars:25,price:310},
+                {id:"5168103777563050263",emoji:"🌹",name:"Красная роза",stars:25,price:310},
+                {id:"5170144170496491616",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
+                {id:"5170314324215857265",emoji:"💐",name:"Букет",stars:50,price:625},
+                {id:"5170564780938756245",emoji:"🚀",name:"Ракета",stars:50,price:625},
+                {id:"6028601630662853006",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
+                {id:"5168043875654172773",emoji:"🏆",name:"Кубок",stars:100,price:1250},
+                {id:"5170690322832818290",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
+                {id:"5170521118301225164",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
         for(var gi=0;gi<gl.length;gi++){if(gl[gi].id===gid)g2=gl[gi];}
         if(!g2)return Promise.resolve({ok:false,error:"unknown gift"});
         if(o.shards<g2.price)return Promise.resolve({ok:false,error:"not enough shards",need:g2.price,shards:o.shards});
@@ -718,18 +752,17 @@ var LOC=(function(){
         return Promise.resolve({ok:true,gift:{emoji:g2.emoji,name:g2.name},spent:g2.price,shards:o.shards});
       }
       if(path==="/api/stars/boost"){
-        return Promise.resolve({ok:true,sent:false,pack:"fall_boost",shards:o.shards,boost_price:200});
+        return Promise.resolve({ok:true,sent:false,pack:"fall_boost",shards:o.shards});
       }
-      /* Заморозка серии: офлайн считаем локально, но цены — как на сервере. */
       if(path==="/api/freeze"){
-        o.freeze=o.freeze||{tokens:0};
+        var fz=o.freeze||{tokens:0};
         if(body&&body.action==="buy_shards"){
-          if(o.freeze.tokens>=3)return Promise.resolve({ok:false,error:"max",max:3,tokens:o.freeze.tokens});
-          if((o.shards||0)<100)return Promise.resolve({ok:false,error:"not enough shards",need:100,tokens:o.freeze.tokens});
-          o.shards-=100;o.freeze.tokens+=1;save(o);
-          return Promise.resolve({ok:true,spent:100,tokens:o.freeze.tokens,shards:o.shards});
+          if(fz.tokens>=3)return Promise.resolve({ok:false,error:"max",max:3});
+          if((o.shards||0)<100)return Promise.resolve({ok:false,error:"not enough shards",need:100,tokens:fz.tokens});
+          o.shards-=100;fz.tokens++;o.freeze=fz;save(o);
+          return Promise.resolve({ok:true,spent:100,tokens:fz.tokens,shards:o.shards});
         }
-        return Promise.resolve({ok:true,tokens:o.freeze.tokens,max:3,cost_shards:100,cost_stars:50,shards:o.shards});
+        return Promise.resolve({ok:true,tokens:fz.tokens,max:3,cost_shards:100,cost_stars:50,shards:o.shards});
       }
       if(path==="/api/cards"){
         if(body.action==="state"){
@@ -820,12 +853,14 @@ var LOC=(function(){
          Без них кнопки «Посмотреть рекламу» и «Вызвать» выглядели сломанными
          при открытии игры вне Telegram. Контракты повторяют серверные. --- */
       if(path==="/api/ad/reward"){
+        /* Офлайн: 25 монет и 3 осколка (0.3 звезды) за просмотр. */
         var t2=day();
         o.adSeen=o.adSeen||{};o.adSeen[t2]=o.adSeen[t2]||0;
         if(o.adSeen[t2]>=5){ return Promise.resolve({ok:false,error:"ad limit",coins:o.coins,lives:o.lives}); }
-        o.adSeen[t2]++;o.coins+=15;
+        o.adSeen[t2]++;o.coins+=25;
+        o.shards=(o.shards||0)+3;
         save(o);
-        return Promise.resolve({ok:true,reward:15,left:5-o.adSeen[t2],coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level});
+        return Promise.resolve({ok:true,reward:25,shards:3,left:5-o.adSeen[t2],coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level,shards_total:o.shards});
       }
       if(path==="/api/bp/claim"){
         var LV=[{c:0,n:"Старт",r:{}},{c:500,n:"+100 🪙",r:{coins:100}},{c:1200,n:"+200 🪙",r:{coins:200}},
@@ -1210,6 +1245,12 @@ function shardToast(units){
  }catch(e){}
 }
 
+/* Цена бустера приходит с сервера (/api/stars -> boost_price), чтобы фронт
+   и инвойс бота всегда показывали одну и ту же цифру. */
+function boostLabel(){
+ var p=(STAR&&STAR.boost_price)||200;
+ return "Купить «Звездопад+» — "+p+" ⭐";
+}
 function applyStarState(j){
  if(!j)return;
  if(typeof j.shards==="number")S.shards=j.shards;
@@ -1228,16 +1269,16 @@ async function loadStars(){
    ? "🌠 Звездопад идёт прямо сейчас — шанс дропа повышен!"
    : "Звездопад откроется в "+j.fall_next+" (пятница 18:00 → воскресенье 23:59 МСК)";
   $("starChance").textContent="Шанс осколка за событие: "+Math.round((j.chance||0)*100)+"%";
+  var pl=j.pool||{};
+  var mine=(j.contributed||0), earned=(j.pool_earned||0), cap=(j.pool_cap||0);
+  $("poolInfo").innerHTML="Общий пул осколков: <b style='color:#ffd76a'>"+Math.round((pl.stars||0))+" ⭐</b> · "+
+   (pl.margin_pct||20)+"% взносов остаётся проекту. "+
+   (mine>0?("Твой взнос: <b>"+Math.round(mine/10)+" ⭐</b>, получено из пула <b>"+Math.round(earned/10)+" ⭐</b> (потолок "+Math.round(cap/10)+" ⭐). "):"")+
+   "Активные игроки делят пул по активности — с рандомом.";
+  var bb=$("boostBtn"); if(bb&&!bb.disabled) bb.textContent=boostLabel();
   $("fallText").textContent = j.fall_open
    ? "Окно Звездопада открыто — осколки падают чаще. Бустер «Звездопад+» добавляет ещё +80% к шансу на 3 дня."
    : "Следующее окно — "+j.fall_next+". В это время шанс дропа удваивается.";
-  var bp=j.boost_price||200;
-  var bt=$("boostBtn"); if(bt) bt.textContent="Купить «Звездопад+» — "+bp+" ⭐";
-  var bn=$("boostNote");
-  if(bn){
-   var poolTxt=(j.pool&&j.pool.stars!=null)?(" В общий пул уходит "+Math.round(j.pool.stars*10)+" осколков, "+j.pool.margin_pct+"% остаётся проекту."):"";
-   bn.textContent="Цена "+bp+" ⭐. Ты вносишь осколки в общий пул и получаешь гарантированный возврат 35% взноса осколками"+poolTxt;
-  }
   $("starGiftNote").textContent = j.gift_open
    ? "Обмен открыт. Один подарок в сутки, осколки списываются после отправки."
    : "Обмен откроется "+j.gift_next+" (1-е..7-е число месяца).";
@@ -1279,48 +1320,117 @@ async function loadStars(){
  });
 }
 
+document.getElementById("petStageUpBtn").onclick=async function(){
+ var b=this; b.disabled=true; b.textContent="Прокачиваю…";
+ var j=await api2("/api/pet",{action:"upgrade"});
+ if(j&&j.ok){
+  toast("Стадия "+j.stage+" — питомец вырос!");
+  if(j.pet) PET=j.pet;
+  if(j.shards!==undefined) S.shards=j.shards;
+  renderPet();
+  try{ loadStars(); }catch(e){}
+ }else if(j&&j.error==="not enough shards"){
+  toast("Не хватает осколков: нужно "+Math.ceil((j.need||0)/10)+" ⭐");
+ }else if(j&&j.error==="not hatched"){
+  toast("Сначала вылупи питомца");
+ }else{
+  toast("Не получилось прокачать");
+ }
+ b.disabled=false; b.textContent="⬆️ Прокачать стадию";
+};
+
 document.getElementById("boostBtn").onclick=async function(){
  var b=this;b.disabled=true;b.textContent="Отправляю…";
  var j=await api2("/api/stars/boost",{});
- b.disabled=false;
- var bprice=STAR&&STAR.boost_price?STAR.boost_price:200;
- b.textContent="Купить «Звездопад+» — "+bprice+" ⭐";
+ b.disabled=false;b.textContent=boostLabel();
  if(j&&j.ok){toast("Покупка отправлена — подтверди в Telegram");}
- else{toast("Не получилось купить бустер");}
+ else if(j&&j.error==="terms not accepted"){
+  toast("Сначала прими условия");
+  document.querySelector('.tabs button[data-v=terms]').click();
+ }
+ else{toast("Не получилось купить бустер")};
 };
 
-/* ---------- ЗАМОРОЗКА СЕРИИ ---------- */
+/* ---------- FREEZE: заморозка серии ---------- */
+var FREEZE_ST=null;
 async function loadFreeze(){
  var j=await api2("/api/freeze",{action:"state"});
  if(!j||!j.ok)return;
- var box=$("freezeState"); if(box){
-  var t=j.tokens||0, mx=j.max||3;
-  box.textContent="В запасе: "+t+" из "+mx+" заморозок. Докупка за "+(j.cost_shards||100)+" осколков или "+(j.cost_stars||50)+" Stars.";
- }
- var sb=$("freezeShardsBtn"), stb=$("freezeStarsBtn");
- var can=typeof j.shards==="number" && j.shards>=(j.cost_shards||100);
- if(sb){ sb.disabled=!can; sb.textContent="Докупить за "+(j.cost_shards||100)+" ✨"; }
- if(stb){ stb.textContent="За "+(j.cost_stars||50)+" ⭐"; }
- if(typeof j.shards==="number"){S.shards=j.shards;try{$("starCount").textContent=S.shards;}catch(e){}}
+ FREEZE_ST=j;
+ var box=$("freezeBox"); if(!box)return;
+ var costS=Math.ceil((j.cost_shards||100)/10);
+ box.innerHTML="Заморозок в запаре: <b style='color:#ffd76a'>"+(j.tokens||0)+" / "+(j.max||3)+"</b> · "+
+  "одна бесплатная раз в 7 дней. Пропуск ровно одного дня не обнуляет серию.";
+ var bs=$("freezeBuyShards"),bt=$("freezeBuyStars");
+ if(bs) bs.style.display=(j.tokens>0&&j.tokens<(j.max||3))?"":"none";
+ if(bt) bt.style.display=(j.tokens<(j.max||3))?"":"none";
 }
-if($("freezeShardsBtn"))$("freezeShardsBtn").onclick=async function(){
- var b=this;b.disabled=true;b.textContent="…";
+var freezeBuyShardsBtn=$("freezeBuyShards");
+if(freezeBuyShardsBtn) freezeBuyShardsBtn.onclick=async function(){
+ var b=this; b.disabled=true; b.textContent="Списываю…";
  var j=await api2("/api/freeze",{action:"buy_shards"});
- b.disabled=false;
- if(j&&j.ok){
-  if(typeof j.shards==="number"){S.shards=j.shards;try{$("starCount").textContent=S.shards;}catch(e){}}
-  toast("❄️ Заморозка куплена: "+j.tokens+" в запасе");
-  loadFreeze();
- }else{
-  var m="Не хватило осколков";
-  if(j&&j.error==="max")m="Заморозок уже максимум ("+(j.max||3)+")";
-  else if(j&&j.need)m="Нужно "+j.need+" ✨ осколков";
-  toast(m);
- }
+ b.disabled=false; b.textContent="❄️ Докупить заморозку за "+Math.ceil((FREEZE_ST&&FREEZE_ST.cost_shards||100)/10)+" ✨ (1 ⭐)";
+ if(j&&j.ok){ applyStarState(j); toast("❄️ Заморозка получена"); loadFreeze(); }
+ else if(j&&j.error==="not enough shards"){ toast("Не хватает осколков — нужно "+Math.ceil((j.need||100)/10)+" ⭐"); }
+ else if(j&&j.error==="max"){ toast("Заморозок уже максимум ("+(j.max||3)+")"); }
+ else { toast("Не получилось купить заморозку"); }
 };
-if($("freezeStarsBtn"))$("freezeStarsBtn").onclick=function(){
+var freezeBuyStarsBtn=$("freezeBuyStars");
+if(freezeBuyStarsBtn) freezeBuyStarsBtn.onclick=function(){
  try{ botCmd("buy:freeze_stars"); }catch(e){ toast("Не удалось открыть бота"); }
 };
+
+/* ---------- TERMS: условия, галочка, пул ---------- */
+let TERMS_LOADED=false;
+async function loadTerms(){
+ var el=$("termsBody"),vb=$("termsVersion");
+ try{
+  var r=await fetch(API+"/api/terms",{headers:{"Content-Type":"application/json"}});
+  var j=await r.json();
+  if(j&&j.terms){
+   var t=j.terms;
+   if(vb) vb.textContent="Версия "+t.version+" · обновлено "+t.updated;
+   if(el){
+    el.innerHTML="";
+    (t.sections||[]).forEach(function(sec){
+     var d=document.createElement("div");
+     d.style.marginBottom="11px";
+     var h=document.createElement("div");
+     h.style.cssText="font-weight:800;font-size:13px;margin-bottom:3px;color:#ffd76a";
+     h.textContent=sec.title;
+     var b=document.createElement("div");
+     b.style.cssText="font-size:13px;line-height:1.55;color:#c9d9ef";
+     b.textContent=sec.body;
+     d.appendChild(h);d.appendChild(b);el.appendChild(d);
+    });
+   }
+   TERMS_LOADED=true;
+  }
+ }catch(e){ if(el) el.textContent="Не удалось загрузить условия. Проверь соединение."; }
+ // Статус согласия спрашиваем у сервера.
+ try{
+  var w=await api2("/api/terms",{});
+  if(w&&w.accepted){
+   var cb=$("termsAccept"); if(cb) cb.checked=true;
+   var st=$("termsStatus");
+   if(st) st.innerHTML="<b style='color:#7ee787'>Условия приняты ✅</b>";
+  }
+ }catch(e){}
+}
+$("termsSave").onclick=async function(){
+ var cb=$("termsAccept");
+ if(!cb||!cb.checked){ toast("Поставь галочку — без неё условия не приняты"); return; }
+ var b=$("termsSave"); b.disabled=true;
+ var j=await api2("/api/terms",{accept:true});
+ b.disabled=false;
+ var st=$("termsStatus");
+ if(j&&j.ok&&j.accepted){ if(st) st.innerHTML="<b style='color:#7ee787'>Условия приняты ✅</b>"; toast("Условия приняты"); }
+ else { if(st) st.textContent="Не удалось сохранить. Попробуй ещё раз."; }
+};
+$("starsTermsBtn").onclick=function(){
+ document.querySelector('.tabs button[data-v=terms]').click();
+};
+if(!TERMS_LOADED) loadTerms();
 
 /* ---------- tabs ---------- */
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
@@ -1332,6 +1442,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); try{initReferral();}catch(e){} try{initContest();}catch(e){} loadBP(); try{loadLeaderboard();}catch(e){} }
  if(b.dataset.v==='cards'){ loadCards(); loadTourney(); }
  if(b.dataset.v==='stars'){ loadStars(); try{loadFreeze();}catch(e){} }
+ if(b.dataset.v==='terms'){ loadTerms(); }
 });
 
 /* ---------- QUIZ (server-authoritative) ---------- */
@@ -1936,7 +2047,7 @@ function initReferral(){
  /* Бонус начисляется автоматически при возврате из Mira.
     Раньше игрок уходил к Mira и терял 50 монет: вспомнить про кнопку почти невозможно. */
  try{checkPromoReturn();}catch(e){}
- /* Rewarded-реклама: +15 🪙 за просмотр, лимит 5 в день (лимит держит сервер). */
+ /* Rewarded-реклама: +25 🪙 и +0.3 звезды осколками за просмотр, лимит 5 в день (лимит держит сервер). */
  var ad=$("adBtn"), adOv=$("adOverlay"), adCnt=$("adCount"), adSub=$("adSub"), adImg=$("adImg");
  var adTitle=$("adTitle"), adCta=$("adCta"), adClick=$("adClick");
  var adCur=null;          /* текущая кампания */
@@ -1983,7 +2094,7 @@ function initReferral(){
   adOv.style.display="flex";
   var left=5;
   if(adCnt) adCnt.textContent="Реклама через "+left+"…";
-  if(adSub) adSub.textContent="Досмотри до конца — получишь +25 🪙 и осколки";
+  if(adSub) adSub.textContent="Досмотри до конца — получишь +25 🪙 и 0.3 звезды осколками";
   await new Promise(function(res){ var tm=setInterval(function(){
     left--; if(adCnt) adCnt.textContent=left>0?("Реклама через "+left+"…"):"Можно забирать монеты!";
     if(left<=0){clearInterval(tm);res();}
@@ -1996,10 +2107,8 @@ function initReferral(){
   var watched=await showAd();
   if(!watched){ toast("Реклама сейчас недоступна"); return; }
   var j=await api2("/api/ad/reward",{});
-  if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙";
-   toast("Начислено +"+j.reward+" 🪙"+(j.shards?(" и +"+j.shards+" ✨"):""));
+  if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙"; toast("Начислено +"+j.reward+" 🪙");
    if(typeof j.coins==="number"){S.coins=j.coins;paint();}
-   if(typeof j.shards==="number"){S.shards=j.shards;paint();try{$("starCount").textContent=S.shards;}catch(e){}}
    var an=$("adNote"); if(an&&typeof j.left==="number") an.textContent="Осталось просмотров сегодня: "+j.left;
    if(adOv) adOv.style.display="none";
   } else if(j&&j.error==="ad limit"){ ad.disabled=true; ad.textContent="Реклама на сегодня закончилась";
@@ -2241,6 +2350,26 @@ function renderPet(){
  const nx = PET.next_xp;
  xp.textContent = "XP "+PET.xp+(nx?(" / "+nx):" — максимум");
  pw.textContent = "сила " + PET.power;
+ // Блок прокачки стадии за осколки
+ const upBox=document.getElementById("petStageUp"), upBtn=document.getElementById("petStageUpBtn");
+ if(upBox){
+  const cost=PET.stage_up_cost||0, maxed=(PET.stage_up_stage||0)>=(PET.stage_max||5);
+  if(maxed){
+   upBox.innerHTML="Питомец на максимальной стадии — <b style='color:#7ee787'>Легенда</b> 🌟";
+   if(upBtn) upBtn.style.display="none";
+  }else if(cost>0){
+   const have=Math.floor((S.shards||0)/10);
+   upBox.innerHTML="Следующая стадия: <b>"+Math.ceil(cost/10)+" ⭐</b> осколков. У тебя: <b>"+have+" ⭐</b>.";
+   if(upBtn){
+    upBtn.style.display="";
+    upBtn.textContent="⬆️ Прокачать за "+Math.ceil(cost/10)+" ⭐";
+    upBtn.disabled=(S.shards||0)<cost;
+   }
+  }else{
+   upBox.innerHTML="Данные о стадии недоступны.";
+   if(upBtn) upBtn.style.display="none";
+  }
+ }
  document.getElementById("petBars").innerHTML =
    petBar("\U0001F34E Голод", PET.hunger, "#ff8a5b")+
    petBar("\U0001F3AE Радость", PET.happiness, "#ffd76a")+
