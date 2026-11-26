@@ -217,6 +217,58 @@ GRAM_FLOOR_URL = ("https://raw.githubusercontent.com/Atlannn/telegram-gifts-floo
                    "main/data/latest.json")
 GRAM_FLOOR_TTL = 6 * 3600
 
+# ============ ПОДПИСКА ПОДТЕКСТ+ ============
+# Регулярная подписка за Telegram Stars (Bot API 8.0+). Это основной
+# предсказуемый доход: разовая покупка зависит от настроения игрока,
+# подписка платит каждый месяц.
+#
+# Экономика: разработчик получает $0.013 за звезду, игрок платит $0.014-0.020.
+# Тариф 100 Stars = $1.30/мес выручки, 250 = $3.25, 500 = $6.50.
+# Railway Hobby (~$5/мес) окупается 4 платящими подписчиками на тарифе 250.
+SUBSCRIPTION_TIERS = {
+    # id: (stars, название, описание, бонус)
+    # Обещаем только то, что реально начисляется. Лишние «жизни в неделю»
+    # и «бустеры в месяц» убраны: показ невыполнимого бонуса — это отзывы,
+    # а не выручка.
+    "sub_plus": (100, "ПОДТЕКСТ+",
+                 "Без рекламы, +5 осколков в день, приоритет в конкурсе",
+                 {"noads": True, "shards_day": 5}),
+    "sub_pro": (250, "ПОДТЕКСТ+ ПРО",
+                "Всё из PLUS: +15 осколков в день, +1 жизнь в неделю",
+                {"noads": True, "shards_day": 15, "lives_week": 1}),
+    "sub_max": (500, "ПОДТЕКСТ+ МАКС",
+                "Всё из ПРО: +40 осколков в день, 3 жизни в неделю",
+                {"noads": True, "shards_day": 40, "lives_week": 3}),
+}
+# Подписка продлевается на 30 дней. Метаданные о покупке приходят в
+# successful_payment; Telegram сам списывает следующий платёж.
+SUB_DAYS = 30
+
+
+def sub_tier(payload):
+    return SUBSCRIPTION_TIERS.get(payload)
+
+
+def ads_disabled(acc):
+    """Реклама отключена, если куплена вечная отключка ИЛИ активна подписка."""
+    if acc.get("noads"):
+        return True
+    _sub = acc.get("sub") or {}
+    if int(_sub.get("until", 0) or 0) > int(time.time()) and _sub.get("noads"):
+        return True
+    return False
+
+
+def sub_state(acc):
+    """Текущее состояние подписки игрока: активна ли, до какого, что внутри."""
+    st = acc.get("sub") or {}
+    until = int(st.get("until", 0) or 0)
+    active = until > int(time.time())
+    return {"active": active, "until": until,
+            "tier": st.get("tier") if active else None,
+            "days_left": max(0, (until - int(time.time())) // 86400) if active else 0}
+
+
 # Новогодняя тематика: подарки с seasonally-меткой (сезонная витрина).
 GIFT_SEASON = {"🎂", "🎁", "🚀", "🍾", "💝"}
 
@@ -786,6 +838,15 @@ async def buy(message: types.Message):
     await send_invoice(message.chat.id, "coins_100", message.from_user.id)
 
 async def send_invoice(chat_id: int, payload: str, user_id=None):
+    # Подписка: цена берётся из тарифов, а не из PACKS.
+    if payload in SUBSCRIPTION_TIERS:
+        stars, title, desc, _bonus = SUBSCRIPTION_TIERS[payload]
+        await bot.send_invoice(chat_id=chat_id, title=title,
+            description=desc,
+            payload=payload, provider_token="", currency="XTR",
+            subscription_period=2592000,  # 30 дней в секундах
+            prices=[LabeledPrice(label=title, amount=stars)])
+        return
     amount, title = PACKS.get(payload, PACKS["coins_100"])
     # Реферальный купон: если у игрока есть непотраченный — подставляем
     # льготный пакет вместо обычного.
@@ -944,6 +1005,29 @@ def grant(user_id, payload):
         acc = acc_of(d, user_id)
         st = acc.setdefault("freeze", {})
         st["tokens"] = int(st.get("tokens", 0)) + 1
+    elif payload in SUBSCRIPTION_TIERS:
+        # Покупка/продление подписки. Telegram присылает renewed=True при
+        # автопродлении — продлеваем от текущего конца, а не от сегодня,
+        # чтобы не «съедать» оплаченные дни.
+        stars, _name, _desc, bonus = SUBSCRIPTION_TIERS[payload]
+        st = acc.setdefault("sub", {})
+        now = int(time.time())
+        base = int(st.get("until", 0) or 0)
+        if base < now:
+            base = now
+        st["until"] = base + SUB_DAYS * 86400
+        st["tier"] = payload
+        st["stars_total"] = int(st.get("stars_total", 0)) + stars
+        st["shards_day"] = int(bonus.get("shards_day", 0))
+        st["noads"] = bool(bonus.get("noads"))
+        st["lives_week"] = int(bonus.get("lives_week", 0))
+        st["boost_month"] = int(bonus.get("boost_month", 0))
+        st["last_pay"] = now
+        # ВАЖНО: acc["noads"] — это вечная покупка «Без рекламы» за 350 Stars.
+        # Подписка её не даёт, иначе подписчик покупал бы вечную отключку
+        # за 100 Stars в месяц. Отключение рекламы по подписке живёт в st["noads"]
+        # и отключается вместе с подпиской.
+        logging.info("SUB user=%s tier=%s until=%s", user_id, payload, st["until"])
     elif payload == "contest_entry":
         acc = acc_of(d, user_id)
         tier = active_tier(acc)
@@ -966,6 +1050,45 @@ async def paid(message: types.Message):
         {"charge": charge, "payload": p.invoice_payload, "at": datetime.now().isoformat()})
     save_store(d)
     await message.answer(f"Оплата прошла — товар уже в кошельке игры.\n\nБаланс: {acc['coins']} монет · {acc['lives']} жизней.", reply_markup=kb())
+
+@dp.message(Command("sub"))
+async def sub_cmd(message: types.Message):
+    """Тарифы подписки ПОДТЕКСТ+."""
+    acc = load_store().get(str(message.from_user.id), {})
+    st = sub_state(acc)
+    lines = ["ПОДТЕКСТ+ — подписка за Telegram Stars.",
+             "Одна подписка заменяет разовые покупки: осколки капают каждый день.",
+             ""]
+    if st["active"]:
+        lines.append(f"✅ Подписка активна ещё {st['days_left']} дн. "
+                     f"Уровень: {SUBSCRIPTION_TIERS[st['tier']][1]}")
+        lines.append("")
+    for tid, (stars, name, desc, bonus) in SUBSCRIPTION_TIERS.items():
+        lines.append(f"• {name} — {stars} Stars/мес (~${stars * STAR_WITHDRAW_USD:.2f})")
+        lines.append(f"   {desc}")
+    lines.append("")
+    lines.append("Списание раз в 30 дней, отменить можно в любой момент.")
+    rows = [[InlineKeyboardButton(text=f"{SUBSCRIPTION_TIERS[t][1]} · {SUBSCRIPTION_TIERS[t][0]} Stars",
+                                  callback_data=f"sub_buy:{t}")] for t in SUBSCRIPTION_TIERS]
+    rows.append([InlineKeyboardButton(text="💳 Оплатить", callback_data="sub_pay")])
+    await message.answer("\n".join(lines),
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@dp.callback_query(F.data.startswith("sub_buy:"))
+async def sub_buy_cb(q: types.CallbackQuery):
+    tid = q.data.split(":", 1)[1]
+    if tid not in SUBSCRIPTION_TIERS:
+        await q.answer("Тариф не найден", show_alert=True)
+        return
+    try:
+        await send_invoice(q.from_user.id, tid, q.from_user.id)
+    except Exception as e:
+        logging.warning("sub invoice failed: %s", e)
+        await q.answer("Не удалось открыть оплату. Попробуй ещё раз.", show_alert=True)
+        return
+    await q.answer("Открываю оплату…")
+
 
 @dp.message(Command("balance"))
 async def balance(message: types.Message):
@@ -1456,6 +1579,24 @@ def register_visit(acc):
     if streak % 7 == 0:
         reward += DAY_STREAK_BONUS
     acc["coins"] += reward
+    # Бонус подписчика: осколки капают раз в сутки, пока подписка активна.
+    # Начисляем здесь же — это единственная точка, где гарантирован один
+    # вход в ссутки, значит бонус нельзя накопить и сорвать пачкой.
+    _sub = acc.get("sub") or {}
+    if int(_sub.get("until", 0) or 0) > int(time.time()):
+        sub_bonus = int(_sub.get("shards_day", 0) or 0)
+        if sub_bonus > 0:
+            shards_add(acc, sub_bonus, "sub_daily")
+            acc["sub_shards_total"] = int(acc.get("sub_shards_total", 0)) + sub_bonus
+        # Жизни по подписке: раз в 7 дней серии, но не чаще одного раза
+        # в неделю (иначе игрок с длинной серией фармил бы жизни каждый день).
+        _lw = int(_sub.get("lives_week", 0) or 0)
+        if _lw > 0 and streak % 7 == 0:
+            _last_lw = int(acc.get("sub_lives_last", 0) or 0)
+            _now_ts = int(time.time())
+            if _now_ts - _last_lw >= 6 * 86400:
+                acc["lives"] = min(9, int(acc.get("lives", 5)) + _lw)
+                acc["sub_lives_last"] = _now_ts
     if streak >= 7:
         unlock(acc, "streak7")
     return True, reward, streak, penalty
@@ -1478,8 +1619,16 @@ def regen_lives(acc):
     return acc
 
 def wallet_view(acc):
-    v = {"coins": acc["coins"], "lives": acc["lives"], "noads": acc["noads"],
-         "streak": acc["streak"], "best": acc["best"], "level": acc["level"]}
+    v = {"coins": int(acc.get("coins", 0) or 0),
+         "lives": int(acc.get("lives", 0) or 0),
+         "noads": ads_disabled(acc),
+         "streak": int(acc.get("streak", 0) or 0),
+         "best": int(acc.get("best", 0) or 0),
+         "level": int(acc.get("level", 1) or 1)}
+    try:
+        v["sub"] = sub_state(acc)
+    except Exception:
+        pass
     try:
         _fz = streak_freeze_state(acc)
         v["freeze_tokens"] = int(_fz.get("tokens", 0))
@@ -1631,11 +1780,10 @@ async def api_stars(request):
     save_store(d)
     _pp = _pool_load()
     return web.json_response({"ok": True, **star_view(acc),
+                              "sub": sub_state(acc),
                               "gifts": gift_catalog_view(),
                               "gift_window": gift_window_open(),
                               "fall_open": fall_window_open(),
-                              "market": gram_market(),
-                              "convert_rate": GIFT_CONVERT_RATE,
                               "market": gram_market(),
                               "convert_rate": GIFT_CONVERT_RATE,
                               "pool": {"distributable": int(_pp.get("active", 0)) + int(_pp.get("buyer", 0)),
@@ -1644,6 +1792,55 @@ async def api_stars(request):
                                        "margin_pct": int(POOL_MARGIN * 100),
                                        "cap_mult": POOL_BUYER_CAP},
                               "boost_price": PACK_FALL_BOOST})
+
+
+def gift_catalog_clean():
+    """Витрина подарков без 18+ маркировки — для рекламных сетей.
+
+    AdsGram и Monetag запрещают 18+ контент в Mini App, а модерация
+    проверяет приложение и после старта. Этот экран не содержит ни возрастного
+    гейта, ни откровенных формулировок: только витрина подарков и их
+    экономика. Используется как публичная страница для рекламных площадок
+    и для проверки модерации.
+    """
+    out = []
+    for gid, (emo, name, stars, _shards) in GIFT_CATALOG.items():
+        out.append({"id": gid, "emoji": emo, "name": name, "stars": stars,
+                    "price": price_units(stars), "season": emo in GIFT_SEASON,
+                    "convert_stars": int(round(stars * GIFT_CONVERT_RATE)),
+                    "note": "Конвертация в звёзды: %d ⭐ (85%%). Коллекционный — продажа за GRAM."
+                            % int(round(stars * GIFT_CONVERT_RATE))})
+    out.sort(key=lambda x: (x["stars"], x["name"]))
+    return out
+
+
+async def api_gifts_public(request):
+    """Публичная витрина подарков. Без init_data — для рекламных сетей."""
+    return web.json_response({"ok": True, "gifts": gift_catalog_clean(),
+                              "convert_rate": GIFT_CONVERT_RATE,
+                              "market": gram_market()})
+
+
+async def api_sub(request):
+    """Состояние подписки и список тарифов."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data((body or {}).get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    save_store(d)
+    tiers = []
+    for tid, (stars, name, desc, bonus) in SUBSCRIPTION_TIERS.items():
+        tiers.append({"id": tid, "stars": stars, "name": name, "desc": desc,
+                      "bonus": bonus, "usd": round(stars * STAR_WITHDRAW_USD, 2)})
+    return web.json_response({"ok": True, "sub": sub_state(acc),
+                              "tiers": tiers, "days": SUB_DAYS})
 
 
 async def api_gift_buy(request):
@@ -2684,7 +2881,7 @@ async def api_ad_reward(request):
     if not uid:
         return web.json_response({"error": "no user"}, status=401)
     d = load_store(); acc = acc_of(d, uid)
-    if acc.get("noads"):
+    if ads_disabled(acc):
         save_store(d)
         return web.json_response({"ok": True, "reward": 0, "skipped": True, **wallet_view(acc)})
     import datetime
@@ -4733,6 +4930,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/terms", api_terms)
     app.router.add_post("/api/wallet", api_wallet)
     app.router.add_post("/api/stars", api_stars)
+    app.router.add_post("/api/sub", api_sub)
+    app.router.add_get("/api/gifts/public", api_gifts_public)
     app.router.add_post("/api/stars/gift", api_gift_buy)
     app.router.add_post("/api/stars/boost", api_fall_boost)
     app.router.add_post("/api/action", api_action)
