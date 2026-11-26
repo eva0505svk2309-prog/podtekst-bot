@@ -429,7 +429,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="adOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,2,16,.94);z-index:9999;align-items:center;justify-content:center;padding:18px;flex-direction:column">
    <div style="max-width:420px;width:100%">
     <div id="adClick" style="cursor:pointer;position:relative;border-radius:16px;overflow:hidden">
-     <img id="adImg" src="house-ad.jpg" style="width:100%;border-radius:16px;display:block">
+     <img id="adImg" src="house-ad.jpg" onerror="this.onerror=null;this.src='ad-fallback.jpg';" style="width:100%;border-radius:16px;display:block;min-height:180px;background:#241046">
      <div id="adTitle" style="position:absolute;left:0;right:0;top:0;padding:9px 11px;background:linear-gradient(rgba(10,4,22,.9),transparent);font-size:13px;color:#ffe9a8;font-weight:800"></div>
      <div id="adCta" style="position:absolute;left:0;right:0;bottom:0;padding:9px 11px;background:linear-gradient(transparent,rgba(10,4,22,.94));font-size:12px;color:#fff;font-weight:700">Открыть рекламу ↗</div>
     </div>
@@ -1729,7 +1729,7 @@ function initReferral(){
   return adCur;
  }
  function renderAd(a){
-  if(adImg&&a.img) adImg.src=a.img;
+  if(adImg&&a.img){ adImg.onerror=function(){this.onerror=null;this.src="ad-fallback.jpg";}; adImg.src=a.img; }
   if(adTitle) adTitle.textContent=a.title||"";
   if(adCta) adCta.textContent="Открыть рекламу ↗";
  }
