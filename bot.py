@@ -1473,6 +1473,7 @@ async def api_answer(request):
         chal["streak"] = int(chal.get("streak", 0)) + 1 if chal.get("last") == day_shift(today, -1) else 1
     chal["last"] = today
 
+    drop_units = 0
     if good:
         acc["coins"] += 10
         acc["streak"] += 1
@@ -1484,6 +1485,7 @@ async def api_answer(request):
         if acc["quiz_streak"] >= 3:
             _u, _r = try_drop_shard(acc, "quiz")
             if _u:
+                drop_units = _u
                 logging.info("SHARD user=%s units=%s quiz", uid, _u)
         if not chal.get("done"):
             chal["done"] = 1
@@ -1507,7 +1509,8 @@ async def api_answer(request):
         acc["lives"] = max(1, acc["lives"] - 1)
     save_store(d)
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
-                              "hint": q["h"], **bp_state(acc), **wallet_view(acc)})
+                              "hint": q["h"], "drop": int(drop_units),
+                              **bp_state(acc), **wallet_view(acc)})
 
 
 # ---------------- Mini App API: прогресс match-3 + профиль ----------------
@@ -1564,6 +1567,7 @@ def unlock(acc, key):
 
 async def api_m3(request):
     """Сохранение прогресса match-3. Сервер проверяет всё, что можно проверить."""
+    m3_drop = 0
     try:
         body = await request.json()
     except Exception:
@@ -1637,6 +1641,7 @@ async def api_m3(request):
             pet_add_xp(d, acc, "m3")
             _u, _r = try_drop_shard(acc, "m3")
             if _u:
+                m3_drop = _u
                 logging.info("SHARD user=%s units=%s m3", uid, _u)
             m["lvl"] = cur + 1
             m["score"] = 0
@@ -1648,8 +1653,8 @@ async def api_m3(request):
             if int(m.get("garland", 0)) >= 10: unlock(acc, "all_lamps")
             save_store(d)
             return web.json_response({"ok": True, "levelup": True, "stars": stars,
-                                      "reward": 30 + stars * 20, **wallet_view(acc),
-                                      **m3_view(acc)})
+                                      "reward": 30 + stars * 20, "drop": int(m3_drop),
+                                      **wallet_view(acc), **m3_view(acc)})
 
         if combo >= 5: unlock(acc, "combo5")
         if combo >= 8: unlock(acc, "combo8")
@@ -1658,7 +1663,8 @@ async def api_m3(request):
         if int(m.get("best", 0)) == 0 and score > 0:
             m["best"] = score
         save_store(d)
-        return web.json_response({"ok": True, "levelup": False, **wallet_view(acc), **m3_view(acc)})
+        return web.json_response({"ok": True, "levelup": False, "drop": int(m3_drop),
+                                  **wallet_view(acc), **m3_view(acc)})
 
     if action == "profile":
         save_store(d)
