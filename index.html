@@ -1026,6 +1026,7 @@ async function api(action,extra){
   const j=await r.json();
   if(j&&typeof j.coins==="number"){S.coins=j.coins;S.lives=j.lives;S.streak=j.streak;S.best=j.best;S.lvl=j.level;S.noads=j.noads;paint();}
   if(j&&typeof j.shards==="number"){S.shards=j.shards;paint();}
+  if(j&&j.drop){shardToast(j.drop);}
   return j;
  }catch(e){return null;}
 }
@@ -1056,7 +1057,11 @@ async function api2(path,body){
  try{
   const r=await fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},
    body:JSON.stringify(Object.assign({init_data:INIT},body||{}))});
-  return await r.json();
+  const j=await r.json();
+  if(j&&typeof j.coins==="number"){S.coins=j.coins;S.lives=j.lives;S.streak=j.streak;S.best=j.best;S.lvl=j.level;S.noads=j.noads;paint();}
+  if(j&&typeof j.shards==="number"){S.shards=j.shards;paint();}
+  if(j&&j.drop){shardToast(j.drop);}
+  return j;
  }catch(e){return null;}
 }
 
@@ -1937,6 +1942,7 @@ async function registerVisit(){
   if(j&&j.ok){
    ret=j;
    if(typeof j.coins==="number"){S.coins=j.coins;S.lives=j.lives;paint();}
+   if(j.drop){shardToast(j.drop);}
    if(j.new_day){
     const p=$("visitPop");
     if(p){p.querySelector(".t").textContent="+"+j.reward+" 🪙";
@@ -2617,6 +2623,7 @@ async function duelFinish(){
  const r = j.result;
  if(typeof j.coins==="number"){ S.coins=j.coins; paint(); }
  if(j.pet) PET = j.pet;
+ if(j.drop){ shardToast(j.drop); }
  document.getElementById("duelBattle").style.display = "none";
  document.getElementById("duelQ").textContent = "";
  document.getElementById("duelOpts").innerHTML = "";
