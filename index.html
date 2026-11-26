@@ -314,6 +314,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
  </div>
  <div class="row">
   <button id="mHint">Подсказка · 20 🪙</button>
+  <button id="mContinue" class="pri" style="display:none">▶️ Продолжить</button>
   <button id="mReset">Заново</button>
   <button id="mShare">📤 Поделиться</button>
  </div>
@@ -970,6 +971,9 @@ var LOC=(function(){
         o.m3.level=extra.level||o.m3.level;o.m3.best=Math.max(o.m3.best,extra.score||0);
         o.m3.plays=extra.plays||o.m3.plays;o.m3.garland=extra.garland||o.m3.garland;
         o.m3.maxcombo=Math.max(o.m3.maxcombo,extra.maxcombo||0);o.m3.total=(o.m3.total||0)+(extra.score||0);
+        /* Офлайн тоже помнит прогресс уровня: очки, ходы и лампы. */
+        o.m3.score=extra.score||0;o.m3.moves=typeof extra.moves==="number"?extra.moves:20;
+        o.m3.lamps=extra.lamps||0;
         o.best=o.m3.best;o.level=o.m3.level;
         o.bp=o.bp||{coins:0,level:1,claimed:[]};
         o.bp.coins=(o.bp.coins||0)+20;
@@ -980,7 +984,11 @@ var LOC=(function(){
         return Promise.resolve({ok:true,level:o.m3.level,coins:o.coins});
       }
       if(action==="profile"){
-        return Promise.resolve({ok:true,level:o.m3.level,best:o.m3.best,plays:o.m3.plays,garland:o.m3.garland,maxcombo:o.m3.maxcombo,total:o.m3.total,coins:o.coins});
+        return Promise.resolve({ok:true,level:o.m3.level,best:o.m3.best,plays:o.m3.plays,garland:o.m3.garland,maxcombo:o.m3.maxcombo,total:o.m3.total,coins:o.coins,
+         m3:{lvl:o.m3.level,score:o.m3.score||0,moves:typeof o.m3.moves==="number"?o.m3.moves:20,
+             best:o.m3.best,plays:o.m3.plays,garland:o.m3.garland,lamps:o.m3.lamps||0,
+             combo:0,maxcombo:o.m3.maxcombo,total:o.m3.total,cleared:o.m3.cleared||0},
+         goal:Math.round(260*Math.pow(1.30,Math.max(1,o.m3.level)-1))});
       }
       save(o);return Promise.resolve({ok:true,coins:o.coins});
     },
@@ -1770,6 +1778,7 @@ function upd(){document.getElementById("moves").textContent=moves;
  const sc=document.getElementById("score");if(sc)sc.textContent=score;
  document.getElementById("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
 function levelSetup(){score=0;goal=m3Goal(m3.lvl||1);moves=M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
+ var cb0=$("mContinue"); if(cb0) cb0.style.display="none";
  rng=Math.random;grid=makeBoard();comboUI(0);resetGarland();upd();render();
  const h=document.getElementById("m3hint");if(h)h.textContent="Собери гирлянду — 10 ламп и бонус!";
  slate("🎄 НОВЫЙ УРОВЕНЬ · "+S.lvl);}
@@ -1785,7 +1794,22 @@ document.getElementById("mHint").onclick=()=>{if(!spendCoins(20))return;save();
   if(ok){document.getElementById("m3hint").textContent="Попробуй обменять эти два";burst(r,c,"#2f9e44",8);return}}
  document.getElementById("m3hint").textContent="Ходов нет — перемешаю";grid=makeBoard();render()};
 document.getElementById("mLife").onclick=()=>{botCmd("buy:lives")};
-document.getElementById("mReset").onclick=()=>{restartLevel()};
+document.getElementById("mContinue").onclick=async function(){
+ var b=this; b.disabled=true; b.textContent="Загружаю…";
+ var ok=await loadM3Memory(false);
+ b.disabled=false; b.textContent="▶️ Продолжить";
+ if(!ok)toast("Сохранённого уровня нет — начинаем новый");
+};
+("mReset").onclick=async function(){
+ /* «Заново» обнуляет и сервер, иначе старый прогресс вернёлся бы при следующем save. */
+ try{
+  await m3Api("save",{level:(m3&&m3.lvl)||1,score:0,moves:M3_MAX_MOVES,
+   garland:(m3&&m3.garland)||0,lamps:0,combo:0,maxcombo:(m3&&m3.maxcombo)||0,plays:(m3&&m3.plays)||0});
+ }catch(e){}
+ var cb=$("mContinue"); if(cb) cb.style.display="none";
+ restartLevel();
+ toast("Уровень начат заново");
+};
 
 /* ===== SPECIAL EFFECTS ===== */
 /* 1) След от пальца: ряд подсвеченных клеток, чтобы было видно, куда тянем */
@@ -1839,6 +1863,37 @@ async function m3Api(action,extra){
     newAch=achGot.filter(a=>!before.has(a));if(newAch.length)showNewAch(newAch);}}
   return j;
  }catch(e){return null;}
+}
+
+/* ---------- MATCH-3: память уровня ----------
+   Прогресс живёт на сервере (/api/m3 -> save/profile). Раньше boot всегда
+   обнулял score и moves, поэтому сохранённый уровень терялся при входе.
+   Теперь сначала грузим профиль с сервера и только потом строим доску. */
+function m3HasProgress(){
+ var m=m3||{};
+ return (m.score||0)>0 || (m.moves||M3_MAX_MOVES)<M3_MAX_MOVES || (m.lamps||0)>0;
+}
+function restoreM3(m){
+ if(!m)return false;
+ m3=Object.assign({},m3,m);
+ score=Number(m.score)||0;
+ moves=Math.max(0,Math.min(M3_MAX_MOVES,Number(m.moves)||M3_MAX_MOVES));
+ goal=m3Goal(m3.lvl||1);
+ lastGoal=goal;
+ var cb=$("mContinue"); if(cb) cb.style.display=m3HasProgress()?"":"none";
+ return true;
+}
+async function loadM3Memory(silent){
+ try{
+  var j=await m3Api("profile");
+  if(j&&j.m3&&m3HasProgress()){
+   restoreM3(j.m3);
+   upd(); render();
+   if(!silent)toast("Прогресс восстановлен: "+score+" очков, "+moves+" ходов");
+   return true;
+  }
+ }catch(e){}
+ return false;
 }
 
 function showNewAch(keys){
@@ -2238,6 +2293,15 @@ try{checkPromoReturn();}catch(e){}
     document.getElementById("m3hint").textContent="Собери гирлянду — 10 ламп и бонус!";
     startSnow();
     setTimeout(()=>slate("🎄 ПОДТЕКСТ v3 · NEW YEAR"),400);
+    /* Подтягиваем сохранённый уровень с сервера — только после сборки доски,
+       иначе инициализация затирала бы пришедший прогресс. */
+    loadM3Memory(true).then(function(ok){
+     if(ok){
+      try{queueSave();}catch(e){}
+      var h=document.getElementById("m3hint");
+      if(h)h.textContent="Продолжаем: "+score+" очков, "+moves+" ходов";
+     }
+    });
   }catch(e){ document.getElementById("m3hint").textContent="Не удалось собрать поле"; }
 })();
 $("ts").textContent="v3.4";
