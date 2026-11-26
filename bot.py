@@ -4167,6 +4167,8 @@ COMMANDS = [
     types.BotCommand(command="contest", description="Призовой конкурс"),
     types.BotCommand(command="help", description="Список команд"),
     types.BotCommand(command="paysupport", description="Помощь с оплатой"),
+    types.BotCommand(command="starbalance", description="Баланс звёзд: бота и аккаунта"),
+    types.BotCommand(command="transferstars", description="Перевести звёзды с аккаунта боту"),
 ]
 
 async def set_commands_once():
