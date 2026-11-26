@@ -53,11 +53,16 @@ AD_CAMPAIGNS = [
         "text": "Твой персональный ИИ в Telegram. Подключи и получи +50 🪙",
         "url": MIRA_URL,
         "img": "house-ad.jpg",
-        "weight": 1,
+        # Вес 3: Mira платит нам реферальными токенами - это наш
+        # единственный партнёрский источник дохода, ставим в приоритет.
+        "weight": 3,
     },
 ]
 AD_DEFAULT_IMG = "house-ad.jpg"
-AD_CLICK_BONUS = 15      # 🪙 игроку за просмотр рекламы (это же rewarded-слот)
+AD_CLICK_BONUS = 25      # 🪙 игроку за просмотр рекламы (это же rewarded-слот)
+AD_VIEW_SHARDS = 3       # +0.3 звезды осколками за просмотр рекламы
+AD_MIRA_SHARDS = 10      # +1 звезда осколками за клик именно по Mira
+AD_CLICK_SHARDS = 3      # +0.3 звезды осколками за клик по любой рекламе
 MISS_PENALTY_PCT = 10      # % от монет за пропуск дня (фишка Major)
 SUB_REWARD = 50            # 🪙 за подписку на канал (фишка Notcoin)
 # Deep-link: открыть Mira с уже подставленным вопросом (черновик в поле ввода).
@@ -112,6 +117,16 @@ def kb(src_code=""):
 
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0") or 0)
 
+# Пакет «Звездопад+»: платный бустер (Stars -> взнос в общий пул осколков).
+# Объявляем ДО PACKS: цена нужна и в пакетах, и в логике бустера.
+PACK_FALL_BOOST = 200           # 200 Stars — цена бустера «Звездопад+»
+
+# Заморозка серии: пропуск ровно одного дня не обнуляет дневную серию.
+# Тоже до PACKS: цена идёт и в пакетах, и в витрине.
+FREEZE_MAX = 3             # максимум заморозок в запаре
+FREEZE_FREE_EVERY = 7      # одна бесплатная заморозка раз в 7 дней
+FREEZE_COST_SHARDS = 100   # докупка за 100 осколков (1 звезда)
+FREEZE_COST_STARS = 50     # докупка за 50 Stars
 PACKS = {
     "test_1star": (1, "Тест 1 звезда"),
     "coins_100": (100, "100 монет"),
@@ -124,7 +139,11 @@ PACKS = {
     "coins_100_ref": (80, "100 монет (по рефералке)"),
     # Бустер «Звездопад+»: +80% к шансу выпадения осколка и +25% к силе
     # питомца на 3 дня.
-    "fall_boost": (300, "Звездопад+ на 3 дня — взнос в общий пул осколков"),
+    # Цена бустера = PACK_FALL_BOOST. Держим одно число в одном месте,
+    # иначе фронт показывает одну цену, а инвойс шлёт другую.
+    "fall_boost": (PACK_FALL_BOOST, "Звездопад+ на 3 дня — взнос в общий пул осколков"),
+    # Заморозка серии: пропуск ровно одного дня не обнуляет дневную серию.
+    "freeze_stars": (FREEZE_COST_STARS, "Заморозка серии"),
 }
 REF_COUPON_PACK = "coins_100_ref"
 
@@ -144,17 +163,55 @@ FALL_TO_HOUR = 23               # воскресенье, 23:59
 FALL_BOOST_MULT = 2             # множитель шанса в окне
 FALL_BASE_CHANCE = 0.35         # базовый шанс выпадения осколка за событие
 
-# Пакет «Звездопад+»: платный бустер (Stars -> шанс дропа + сила питомца)
-PACK_FALL_BOOST = 300           # 300 Stars
 FALL_BOOST_PACK_TTL = 86400 * 3  # 3 дня
+
+# Окно обмена на подарки: раз в месяц, 1-е..7-е число.
+GIFT_WINDOW_DAYS = 7
+GIFT_COOLDOWN = 86400           # 1 подарок в сутки на аккаунт
+
+# Рефералка -> звезда. Не просто «приведи друга»: нужна подписка на канал
+# у приглашённого, иначе это чистый фарм.
+REF_SHARD_INVITER = 10          # 1 звезда пригласившему (за живого подписчика)
+REF_SHARD_NEW = 5               # 0.5 звезды новому (сразу за переход)
+REF_DAILY_CAP = 30              # максимум осколков с рефералки в сутки (3 звезды)
+
+# Рефералка: запрет на «пригласил и сразу отписался» — бот смотрит подписку
+# пригласившего в момент начисления и повторно при выдаче.
+REF_SUB_REQUIRED = True
+
+# Витрина подарков: id -> (эмодзи, название, номинал в Stars, осколков)
+GIFT_CATALOG = {
+    "5170145012310081615": ("💝", "Сердце с бантом", 15, 15),
+    "5170233102089322756": ("🧸", "Мишка", 15, 15),
+    "5170250947678437525": ("🎁", "Коробка с бантом", 25, 25),
+    "5168103777563050263": ("🌹", "Красная роза", 25, 25),
+    "5170144170496491616": ("🎂", "Торт ко дню рождения", 50, 50),
+    "5170314324215857265": ("💐", "Букет", 50, 50),
+    "5170564780938756245": ("🚀", "Ракета", 50, 50),
+    "6028601630662853006": ("🍾", "Бутылка шампанского", 50, 50),
+    "5168043875654172773": ("🏆", "Кубок", 100, 100),
+    "5170690322832818290": ("💍", "Кольцо с бриллиантом", 100, 100),
+    "5170521118301225164": ("💎", "Алмаз", 100, 100),
+}
+# Сколько звёзд бот тратит на подарок (номинал Telegram). Столько же нужно
+# отдать игроку осколками + запас на просадку курса при перепродаже.
+GIFT_MARGIN = 1.25
+
+# Новогодняя тематика: подарки с seasonally-меткой (сезонная витрина).
+GIFT_SEASON = {"🎂", "🎁", "🚀", "🍾", "💝"}
 
 # ================= ПУЛ ОСКОЛКОВ =================
 # Бустер — это не «множитель шанса», а ВЗНОС В ОБЩИЙ ПУЛ. Деньги покупателей
 # бустера перетекают к активным игрокам; часть пула остаётся проекту.
 # Ключевое требование: и мы в плюсе, и активные игроки в плюсе.
-POOL_MARGIN = 0.20              # 20% вклада остаётся проекту (гарантированный плюс)
-POOL_ACTIVE_SHARE = 0.60        # 60% распределяемого пула -> общий котёл для ВСЕХ игроков
-POOL_BUYER_SHARE = 0.40         # 40% -> котёл покупателей бустера (с потолком 166%)
+POOL_MARGIN = 0.30              # 30% вклада остаётся проекту (гарантированный плюс)
+POOL_ACTIVE_SHARE = 0.70        # 70% -> общий котёл для ВСЕХ игроков
+POOL_BUYER_SHARE = 0.30         # 30% -> котёл покупателей бустера
+# Гарантированный возврат покупателю: фиксированная доля от взноса,
+# начисляется осколками сразу и БЕЗ случайности. Это не лотерея,
+# а детерминированный частичный возврат — так требуют правила Telegram
+# для 18+ аудитории (никаких обещаний выигрыша).
+POOL_BUYER_GUARANTEE = 0.35     # 35% взноса возвращается покупателю осколками
 POOL_EVENT_RATE = 0.02          # в среднем 2% остатка пула выплачивается за событие
 POOL_RAND_LO = 0.6              # нижняя граница рендома выплаты
 POOL_RAND_HI = 1.4              # верхняя граница рендома выплаты
@@ -196,19 +253,25 @@ def _pool_save(p):
         logging.warning("pool save failed: %s", e)
 
 def pool_contribute(uid, stars_paid):
-    """Взнос в пул: 80% игрокам (60% общий котёл + 40% котёл покупателей), 20% проект."""
+    """Взнос в пул. Расклад: 30% — маржа проекта, 70% — игрокам.
+
+    Из 70%: 35% от взноса возвращается покупателю ГАРАНТИРОВАННО
+    (детерминированно, осколками, без RNG), остальное уходит в общий
+    котёл активных игроков. Никаких случайных выплат и обещаний
+    выигрыша — это критично для правил Telegram и 18+ аудитории.
+    """
     units = int(stars_paid) * STAR_PACK
     dist = int(round(units * (1.0 - POOL_MARGIN)))
     margin = units - dist
+    guarantee = int(round(units * POOL_BUYER_GUARANTEE))
+    to_active = dist - guarantee
     p = _pool_load()
-    to_active = int(round(dist * POOL_ACTIVE_SHARE))
-    to_buyer = dist - to_active
     p["active"] = int(p.get("active", 0)) + to_active
-    p["buyer"] = int(p.get("buyer", 0)) + to_buyer
+    p["buyer"] = int(p.get("buyer", 0))
     p["margin"] = int(p.get("margin", 0)) + margin
     p["contrib"][str(uid)] = int(p["contrib"].get(str(uid), 0)) + units
     _pool_save(p)
-    return dist, margin
+    return dist, margin, guarantee
 
 def _pool_activity(acc):
     """Вес активности: серия дней и активный бустер."""
@@ -229,6 +292,8 @@ def pool_payout(acc, reason="event"):
     st = acc.setdefault("star", {})
     contributed = int(st.get("contributed", 0))
     earned = int(st.get("pool_earned", 0))
+    # Покупатель может получить из общего котла не больше своей гарантии
+    # плюс небольшой бонус за активность (потолок POOL_BUYER_CAP).
     allowed_total = int(contributed * POOL_BUYER_CAP) if contributed else 10 ** 9
     allowed = allowed_total - earned
     if allowed <= 0:
@@ -243,14 +308,6 @@ def pool_payout(acc, reason="event"):
         if s1 > 0:
             p["active"] = act - s1
             total += s1
-    if contributed > 0 and total < allowed:
-        by = int(p.get("buyer", 0))
-        if by > 0:
-            s2 = int(by * POOL_EVENT_RATE * mult * activity)
-            s2 = max(0, min(s2, by, allowed - total))
-            if s2 > 0:
-                p["buyer"] = by - s2
-                total += s2
     if total <= 0:
         return 0
     p.setdefault("earned", {})[uid] = int(p["earned"].get(uid, 0)) + total
@@ -450,6 +507,9 @@ async def start(message: types.Message):
     if payload == "buy:noads":
         await send_invoice(message.chat.id, "noads", message.from_user.id)
         return
+    if payload == "buy:freeze":
+        await send_invoice(message.chat.id, "freeze_stars", message.from_user.id)
+        return
     if payload == "buy:contest_entry":
         await send_invoice(message.chat.id, "contest_entry", message.from_user.id)
         return
@@ -511,12 +571,16 @@ async def start(message: types.Message):
                         await bot.send_message(
                             inviter,
                             f"⭐ Твой друг пришёл по ссылке и остался с нами. "
-                            f"Осколок звёзды: +{g_inv/10:.1f} ⭐")
+                            f"Осколок звёзды: +{g_inv/10:.1f} ⭐"
+                            + (f"\n🎁 Он подписался на канал — получи "
+                               f"+{REF_ACTIVATION_SHARDS/10:.1f} ⭐ за активацию."
+                               if g_inv else ""))
                     except Exception as e:
                         logging.warning("ref star notify failed: %s", e)
                     await message.answer(
                         f"🎁 Привет! Тебе +20 🪙 и осколок звёзды "
-                        f"+{g_new/10:.1f} ⭐ за то, что пришёл по ссылке друга.")
+                        f"+{g_new/10:.1f} ⭐ за то, что пришёл по ссылке друга. "
+                        "Подпишись на канал — и пригласившему тоже падет звезда.")
                 elif kind == "need_sub_new":
                     await message.answer(
                         "⭐ Чтобы получить осколок звёзды, подпишись на канал "
@@ -552,6 +616,8 @@ async def referral(message: types.Message):
     await message.answer(
         f"Твоя ссылка для друзей:\n{link}\n\n"
         f"Друг пришёл → тебе +50 🪙, ему +20 🪙.\n"
+        f"⭐ Если друг подпишется на канал — тебе <b>+1 звезда</b> "
+        f"(осколками), ему +0.5 звезды сразу.\n"
         f"Приглашено: {invited}. До бонуса +100 🪙 осталось {left}.\n"
         "Бонус начисляется один раз за друга, автоматически.")
 
@@ -796,11 +862,19 @@ def grant(user_id, payload):
         st["boost_until"] = max(int(st.get("boost_until", 0)), int(time.time()) + FALL_BOOST_PACK_TTL)
         # Взнос в общий пул: 80% — активным игрокам, 20% — проект.
         stars_paid = PACKS.get("fall_boost", (PACK_FALL_BOOST, ""))[0]
-        _dist, _margin = pool_contribute(user_id, stars_paid)
+        _dist, _margin, _guar = pool_contribute(user_id, stars_paid)
+        # Гарантированный возврат: 35% взноса осколками, сразу и без RNG.
+        if _guar > 0:
+            shards_add(acc, _guar, "boost_guarantee")
+        st["guaranteed"] = int(st.get("guaranteed", 0)) + _guar
         st["contributed"] = int(st.get("contributed", 0)) + int(stars_paid) * STAR_PACK
         st["pool_earned"] = int(st.get("pool_earned", 0))
         logging.info("POOL contrib user=%s stars=%s dist=%s margin=%s",
                      user_id, stars_paid, _dist, _margin)
+    elif payload == "freeze_stars":
+        acc = acc_of(d, user_id)
+        st = acc.setdefault("freeze", {})
+        st["tokens"] = int(st.get("tokens", 0)) + 1
     elif payload == "contest_entry":
         acc = acc_of(d, user_id)
         tier = active_tier(acc)
@@ -846,6 +920,12 @@ def revoke(user_id, payload):
         acc["lives"] = max(0, acc.get("lives", 0) - 1); return True
     if payload == "noads":
         acc["noads"] = False; return True
+    if payload == "freeze_stars":
+        st = acc.setdefault("freeze", {})
+        if int(st.get("tokens", 0)) > 0:
+            st["tokens"] = int(st["tokens"]) - 1
+            return True
+        return False
     if payload == "fall_boost":
         st = acc.setdefault("star", {})
         st["boost_until"] = 0
@@ -856,11 +936,15 @@ def revoke(user_id, payload):
         st["contributed"] = max(0, int(st.get("contributed", 0)) - units)
         pp = _pool_load()
         back = int(round(units * (1.0 - POOL_MARGIN)))
-        to_active = int(round(back * POOL_ACTIVE_SHARE))
-        to_buyer = back - to_active
+        guarantee = int(round(units * POOL_BUYER_GUARANTEE))
+        to_active = back - guarantee
         pp["active"] = max(0, int(pp.get("active", 0)) - to_active)
-        pp["buyer"] = max(0, int(pp.get("buyer", 0)) - to_buyer)
+        pp["buyer"] = max(0, int(pp.get("buyer", 0)))
         pp["margin"] = max(0, int(pp.get("margin", 0)) - (units - back))
+        _g = int(st.get("guaranteed", 0))
+        if _g > 0:
+            st["guaranteed"] = max(0, _g - guarantee)
+            shards_add(acc, -min(_g, guarantee), "boost_revoke")
         _pool_save(pp)
         return True
     if payload == "contest_entry":
@@ -1239,6 +1323,9 @@ NY_QUESTIONS = [
 # ---------------- Ретеншен: ежедневная серия ----------------
 # Сервер помнит, в какие дни игрок заходил, считает серию подряд и платит
 # за каждый день. Это сердце петли удержания: прогресс видно, за него дают.
+# --- Streak Freeze: заморозка серии, чтобы пропуск дня не обнулял прогресс ---
+
+
 DAY_REWARD = 20          # монет за простое заличие в игре в день
 DAY_BONUS_EVERY = 3     # каждые 3 дня — бонус
 DAY_BONUS = 60
@@ -1325,10 +1412,47 @@ def wallet_view(acc):
     v = {"coins": acc["coins"], "lives": acc["lives"], "noads": acc["noads"],
          "streak": acc["streak"], "best": acc["best"], "level": acc["level"]}
     try:
+        _fz = streak_freeze_state(acc)
+        v["freeze_tokens"] = int(_fz.get("tokens", 0))
+        v["freeze_max"] = FREEZE_MAX
+        v["freeze_cost_shards"] = FREEZE_COST_SHARDS
+    except Exception:
+        v["freeze_tokens"] = 0
+        v["freeze_max"] = FREEZE_MAX
+        v["freeze_cost_shards"] = FREEZE_COST_SHARDS
+    try:
         v.update(star_view(acc))
     except Exception:
         pass
     return v
+
+def streak_freeze_state(acc, today=None):
+    """Состояние заморозок серии: сколько есть, когда последняя была выдана."""
+    today = today or today_key()
+    st = acc.setdefault("freeze", {})
+    tokens = int(st.get("tokens", 0))
+    granted = str(st.get("granted", "") or "")
+    # Раз в неделю - бесплатная заморозка (больше FREEZE_MAX не копится).
+    if not granted or day_shift(granted, FREEZE_FREE_EVERY) <= today:
+        tokens = min(FREEZE_MAX, tokens + 1)
+        st["tokens"] = tokens
+        st["granted"] = today
+    st.setdefault("tokens", tokens)
+    return st
+
+
+def streak_freeze_buy(acc, pay="shards"):
+    """Докупить заморозку за осколки. Возвращает (ok, cost, error)."""
+    st = streak_freeze_state(acc)
+    if int(st.get("tokens", 0)) >= FREEZE_MAX:
+        return False, 0, "max"
+    cost = FREEZE_COST_SHARDS
+    if shards_of(acc) < cost:
+        return False, cost, "not enough shards"
+    shards_add(acc, -cost, "freeze_buy")
+    st["tokens"] = int(st.get("tokens", 0)) + 1
+    return True, cost, ""
+
 
 def add_coins(uid, amount):
     d = load_store(); acc = acc_of(d, uid); acc["coins"] = max(0, acc["coins"] + amount)
@@ -1366,14 +1490,13 @@ async def apply_referral_star(user_id, payload):
     if inviter == user_id:
         return None
     d = load_store()
-    if d.get(f"ref:{user_id}"):
+    # Своя метка для звёздной рефералки: общая d["ref:uid"] ставится
+    # монетной рефералкой раньше, и из-за этого звёздная часть не
+    # начислялась вовсе - "приведи друга и получи звезду" не работало.
+    if d.get(f"ref_star:{user_id}"):
         return None
     sub_new = await _subscribed(user_id)
     sub_inv = await _subscribed(inviter)
-    if sub_new is not True:
-        return ("need_sub_new", inviter, 0, 0)
-    if REF_SUB_REQUIRED and sub_inv is not True:
-        return ("need_sub_inv", inviter, 0, 0)
 
     st_day = acc_of(d, inviter).setdefault("star", {}).setdefault("ref_day", {})
     today = today_key()
@@ -1386,16 +1509,33 @@ async def apply_referral_star(user_id, payload):
         return ("cap", inviter, 0, 0)
 
     a1 = acc_of(d, inviter); a2 = acc_of(d, user_id)
-    give_inv = min(REF_SHARD_INVITER, room)
+    # Новичку осколок идёт СРАЗУ за переход - ради этого он и перешёл
+    # по ссылке. Пригласившему - только за живого подписчика канала,
+    # иначе это чистый фарм (привёл и отписался).
+    # Новичку 0.5 звезды (5 единиц) СРАЗУ за переход по ссылке.
     give_new = min(REF_SHARD_NEW, room)
-    d[f"ref:{user_id}"] = inviter
-    shards_add(a1, give_inv, "referral")
+    give_inv = 0
+    if sub_new is True and (not REF_SUB_REQUIRED or sub_inv is True):
+        give_inv = min(REF_SHARD_INVITER, max(0, room - give_new))
+    d[f"ref_star:{user_id}"] = inviter
     shards_add(a2, give_new, "referral")
+    if give_inv:
+        shards_add(a1, give_inv, "referral")
     st_day["u"] = used + give_inv + give_new
+    if sub_new is not True:
+        save_store(d)
+        return ("need_sub_new", inviter, 0, give_new)
+    if REF_SUB_REQUIRED and sub_inv is not True:
+        save_store(d)
+        return ("need_sub_inv", inviter, 0, give_new)
     # Прежняя монетная рефералка не отменяется — просто больше осколков.
     a1["coins"] += 50
     a1["invited"] = int(a1.get("invited", 0)) + 1
     a1["ref_coupon"] = True
+    # Активация реферала засчитывается, когда приглашённый прошёл 3 квиза
+    # (порог активности). Мёртвые регистрации не платят нам Stars.
+    a2.setdefault("ref_pending", {})["inviter"] = inviter
+    a2.setdefault("ref_pending", {})["quizzes"] = 0
     contest_add_points(d, a1, "ref", 25); bp_add_points(d, a1, "ref")
     a2["coins"] += 20
     milestone = a1["invited"] % 3 == 0
@@ -1791,7 +1931,21 @@ async def api_answer(request):
     if chal.get("date") != today:
         chal["date"] = today
         chal["done"] = 0
-        chal["streak"] = int(chal.get("streak", 0)) + 1 if chal.get("last") == day_shift(today, -1) else 1
+        _last = chal.get("last")
+        if _last == day_shift(today, -1):
+            chal["streak"] = int(chal.get("streak", 0)) + 1
+        elif _last == day_shift(today, -2):
+            # Пропущен ровно один день: если есть заморозка - серия сохраняется.
+            _fz = streak_freeze_state(acc)
+            if int(_fz.get("tokens", 0)) > 0:
+                _fz["tokens"] = int(_fz["tokens"]) - 1
+                acc.setdefault("freeze", {})["used_last"] = today
+                chal["streak"] = int(chal.get("streak", 0)) + 1
+                chal["frozen"] = 1
+            else:
+                chal["streak"] = 1
+        else:
+            chal["streak"] = 1
     chal["last"] = today
 
     drop_units = 0
@@ -1802,6 +1956,22 @@ async def api_answer(request):
         contest_add_points(d, acc, "quiz", 10); bp_add_points(d, acc, "quiz")
         pet_add_xp(d, acc, "quiz")
         acc["quiz_streak"] = int(acc.get("quiz_streak", 0)) + 1
+        # Порог активации реферала: 3 квиза у приглашённого.
+        _rp = acc.get("ref_pending")
+        if isinstance(_rp, dict) and _rp.get("inviter"):
+            _rp["quizzes"] = int(_rp.get("quizzes", 0)) + 1
+            if int(_rp["quizzes"]) >= REF_ACTIVATION_QUIZZES:
+                _inv = int(_rp["inviter"])
+                acc["ref_pending"] = {}
+                # Пишем в ТОТ ЖЕ стор d, что и обработчик квиза: отдельный
+                # load_store/save_store здесь затирался последующим
+                # save_store(d) основного обработчика, и бонус терялся.
+                _a1 = acc_of(d, _inv)
+                _a1["ref_activated"] = int(_a1.get("ref_activated", 0)) + 1
+                _a1["coins"] = int(_a1.get("coins", 0)) + REF_ACTIVATION_BONUS
+                _a1["ref_coupon"] = True
+                # Пригласившему - осколок за активацию: друг реально играет.
+                shards_add(_a1, REF_ACTIVATION_SHARDS, "ref_activated")
         # Осколок за серию: чем длиннее серия, тем выше шанс и тем крупнее кусок.
         if acc["quiz_streak"] >= 3:
             _u, _r = try_drop_shard(acc, "quiz")
@@ -1829,7 +1999,7 @@ async def api_answer(request):
             acc["level"] = lvl
             acc["lives"] = min(9, acc["lives"] + 1)
     else:
-        acc["coins"] = max(0, acc["coins"] - 5)
+        acc["coins"] = max(0, acc.get("coins", 0) - 5)
         acc["streak"] = 0
         acc["quiz_streak"] = 0
         acc["lives"] = max(1, acc["lives"] - 1)
@@ -2138,6 +2308,48 @@ async def api_mira_hint(request):
                               "reward": PROMO_REWARD, "claimed": bool(promo.get("claimed"))})
 
 
+async def api_freeze(request):
+    """Заморозка серии: состояние и покупка.
+
+    POST /api/freeze
+      body: {init_data, action: "state"|"buy_shards",}
+    Покупка за Stars идёт инвойсом бота (payload freeze_stars) —
+    этот эндпоинт только показывает состояние и списывает осколки.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    action = str(body.get("action", "state") or "state")
+    d = load_store(); acc = acc_of(d, uid)
+    st = streak_freeze_state(acc)
+    save_store(d)
+    if action == "buy_shards":
+        ok, cost, err = streak_freeze_buy(acc)
+        save_store(d)
+        if not ok:
+            return web.json_response({"ok": False, "error": err, "need": cost,
+                                      "tokens": int(st.get("tokens", 0)),
+                                      **star_view(acc)})
+        return web.json_response({"ok": True, "spent": cost,
+                                  "tokens": int(st.get("tokens", 0)),
+                                  **star_view(acc)})
+    return web.json_response({
+        "ok": True,
+        "tokens": int(st.get("tokens", 0)),
+        "max": FREEZE_MAX,
+        "cost_shards": FREEZE_COST_SHARDS,
+        "cost_stars": FREEZE_COST_STARS,
+        **star_view(acc),
+    })
+
+
 async def api_ads_stats(request):
     """Сколько игроков пришло с каждой рекламной площадки (start_param ch_*)."""
     try:
@@ -2338,8 +2550,11 @@ async def api_ads_click(request):
     row["clicks"] = int(row.get("clicks", 0)) + 1
     acc.setdefault("ad_clicks", {})
     acc["ad_clicks"][cid] = int(acc["ad_clicks"].get(cid, 0)) + 1
+    # Осколки за клик: клик по Mira ценится выше - это наш партнёр.
+    _sh = AD_MIRA_SHARDS if cid == "mira" else AD_CLICK_SHARDS
+    shards_add(acc, _sh, "ad_click:" + cid)
     save_store(d)
-    return web.json_response({"ok": True})
+    return web.json_response({"ok": True, "shards": _sh})
 
 
 async def api_ad_reward(request):
@@ -2366,10 +2581,15 @@ async def api_ad_reward(request):
         save_store(d)
         return web.json_response({"ok": False, "error": "ad limit", **wallet_view(acc)})
     seen[today] = n + 1
-    acc["coins"] += 15
+    acc["coins"] += AD_CLICK_BONUS
+    # Осколки за просмотр: монеты живут недолго, осколки копятся
+    # и уводят игрока к витрине подарков - там наш настоящий доход.
+    shards_add(acc, AD_VIEW_SHARDS, "ad_view")
     contest_add_points(d, acc, "ad", 5); bp_add_points(d, acc, "ad")
     save_store(d)
-    return web.json_response({"ok": True, "reward": 15, "left": 5 - n - 1, **wallet_view(acc)})
+    return web.json_response({"ok": True, "reward": AD_CLICK_BONUS,
+                              "shards": AD_VIEW_SHARDS,
+                              "left": 5 - n - 1, **wallet_view(acc)})
 
 async def api_channel_sub(request):
     """Игрок подписался на канал — проверяем через get_chat_member и платим разово."""
@@ -3009,15 +3229,24 @@ CONTEST_PRIZE_STARS_EQUIV = 100      # номинал приза в звёзда
 # Призовые места: 1 -> 100 Stars, 2 -> 50, 3 -> 25 (эквивалент в подарках Telegram).
 # Подарок даёт ~N звёзд номинала. Бот не может перевести Stars пользователю
 # (в Bot API нет такого метода), поэтому звёздная часть выдаётся ПОДАРКОМ.
+# Призы конкурса выдаются ОСКОЛКАМИ (внутренняя валюта) и монетами.
+# Раньше здесь стоял Telegram-подарок на 100 Stars: бот не может оплатить
+# подарок со своего баланса (там 1 Star), и такая схема съедала маржу.
+# Осколки выдаются мгновенно, без зависимости от баланса бота.
 CONTEST_PLACES = [
-    {"place": 1, "stars": 100, "coins": 1000, "lives": 5, "gift": "💎"},
-    {"place": 2, "stars": 50,  "coins": 500,  "lives": 3, "gift": "🏆"},
-    {"place": 3, "stars": 25,  "coins": 300,  "lives": 2, "gift": "🎁"},
+    {"place": 1, "stars": 100, "coins": 1000, "lives": 5, "shards": 1000, "gift": "💎"},
+    {"place": 2, "stars": 50,  "coins": 500,  "lives": 3, "shards": 500,  "gift": "🏆"},
+    {"place": 3, "stars": 25,  "coins": 300,  "lives": 2, "shards": 250,  "gift": "🎁"},
 ]
 CONTEST_PRIZE_STARS_EQUIV = CONTEST_PLACES[0]["stars"]  # номинал 1-го места для текстов
 
 # Сколько очков активности даёт каждое действие (тот же вес, что в турнире)
 CONTEST_ACTION_POINTS = {"quiz": 10, "m3": 5, "day": 20, "ref": 25, "share": 15}
+
+# --- Рефералка: активация по порогу активности ---
+REF_ACTIVATION_QUIZZES = 3    # сколько квизов должен пройти приглашённый
+REF_ACTIVATION_BONUS = 100    # бонус пригласившему за активированного друга
+REF_ACTIVATION_SHARDS = 5     # +0.5 звезды пригласившему за активацию
 
 # ---------------- ГЕЙТИНГ: конкурсы открываются по турам ----------------
 # Три ступени конкурса. Каждая открывается только тем, кто реально прошёл
@@ -4398,6 +4627,8 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/ad/reward", api_ad_reward)
     app.router.add_post("/api/ads/serve", api_ads_serve)
     app.router.add_post("/api/ads/click", api_ads_click)
+    app.router.add_post("/api/freeze", api_freeze)
+
     app.router.add_post("/api/cards", api_cards)
     app.router.add_post("/api/tourney", api_tourney)
     app.router.add_post("/api/contest", api_contest)
