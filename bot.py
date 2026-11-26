@@ -1,5 +1,5 @@
 
-import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse, datetime
+import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse, urllib.request, datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -194,8 +194,28 @@ GIFT_CATALOG = {
     "5170521118301225164": ("💎", "Алмаз", 100, 100),
 }
 # Сколько звёзд бот тратит на подарок (номинал Telegram). Столько же нужно
-# отдать игроку осколками + запас на просадку курса при перепродаже.
-GIFT_MARGIN = 1.25
+# отдать игроку осколками.
+# Маржа 1.0 — сознательно. Игрок конвертирует подарок в Stars с потерей 15%
+# (Telegram отдаёт 85% номинала), поэтому цена в осколках равна номиналу: игрок
+# получает 0.85 номинала звёздами и выводит их через Fragment в GRAM.
+# Проект при этом в плюсе: осколки игрок оплачивает по ~$0.02 за звезду,
+# а подарок бот покупает на Stars, выведенных по $0.013.
+GIFT_MARGIN = 1.0
+
+# Telegram конвертирует обычный подарок обратно в Stars с потерей 15%:
+# gift.convert_stars < gift.stars. Это потолок «гарантированного» выхода
+# для игрока, если он не продаёт подарок, а конвертирует его в звёзды.
+GIFT_CONVERT_RATE = 0.85
+
+# Курсы для расчёта ликвидности.
+STAR_WITHDRAW_USD = 0.013      # $ за звезду при выводе через Fragment
+STAR_BUY_USD = 0.020           # $ за звезду при покупке в приложении
+
+# Живые флоры коллекционных подарков (Fragment, ежедневная выгрузка).
+# Источник публичный, токены не нужны: при сбое работаем на последнем кэше.
+GRAM_FLOOR_URL = ("https://raw.githubusercontent.com/Atlannn/telegram-gifts-floor-price/"
+                   "main/data/latest.json")
+GRAM_FLOOR_TTL = 6 * 3600
 
 # Новогодняя тематика: подарки с seasonally-меткой (сезонная витрина).
 GIFT_SEASON = {"🎂", "🎁", "🚀", "🍾", "💝"}
@@ -352,6 +372,43 @@ def fall_next_open_text():
     return names[(4 + days) % 7]
 
 
+_GRAM_MARKET = {"data": None, "ts": 0}
+
+
+def gram_market():
+    """Живая картинка рынка коллекционных подарков: флоры и дата снимка.
+
+    Нужна игроку, чтобы понимать, во что превращаются его осколки: обычный
+    подарок можно конвертировать в Stars (85% номинала), а коллекционные
+    подарки продаются за GRAM на маркетплейсе.
+    """
+    global _GRAM_MARKET
+    now = int(time.time())
+    if _GRAM_MARKET["data"] and now - _GRAM_MARKET["ts"] < GRAM_FLOOR_TTL:
+        return _GRAM_MARKET["data"]
+    data = _GRAM_MARKET["data"]
+    try:
+        req = urllib.request.Request(GRAM_FLOOR_URL, headers={"User-Agent": "podtekst-bot"})
+        raw = json.loads(urllib.request.urlopen(req, timeout=15).read().decode("utf-8"))
+        floors = raw.get("floors") or {}
+        vals = sorted(float(v) for v in floors.values()
+                      if isinstance(v, (int, float)) and v > 0)
+        if vals:
+            data = {"date": raw.get("date"), "count": len(vals),
+                    "min_gram": round(vals[0], 2),
+                    "median_gram": round(vals[len(vals) // 2], 2),
+                    "max_gram": round(vals[-1], 2),
+                    "low_gram": round(vals[max(0, len(vals) // 10)], 2),
+                    "top_gram": round(vals[min(len(vals) - 1, len(vals) // 10)], 2),
+                    "source": raw.get("source") or "fragment.com"}
+    except Exception as e:  # noqa: BLE001
+        logging.warning("gram market fetch failed: %s", e)
+    if data:
+        _GRAM_MARKET["data"] = data
+        _GRAM_MARKET["ts"] = now
+    return data or {}
+
+
 def gift_window_open(now_ts=None):
     """Окно обмена на подарки: 1-е..7-е число каждого месяца."""
     now_ts = now_ts or _now()
@@ -453,11 +510,22 @@ def price_units(stars):
 
 
 def gift_catalog_view():
-    """Витрина подарков с ценами в осколках."""
+    """Витрина подарков с ценами в осколках.
+
+    Для каждого подарка показываем, во что он превращается у игрока:
+      * конвертация в Stars — Telegram отдаёт 85% номинала (гарантированный
+        выход, но звёзды не вывести в фиат);
+      * апгрейд до коллекционного — подарок становится NFT, который продаётся
+        за GRAM на маркетплейсе (комиссия Telegram 10%).
+    """
     out = []
     for gid, (emo, name, stars, shards) in GIFT_CATALOG.items():
         out.append({"id": gid, "emoji": emo, "name": name, "stars": stars,
-                    "price": price_units(stars), "season": emo in GIFT_SEASON})
+                    "price": price_units(stars), "season": emo in GIFT_SEASON,
+                    "convert_stars": int(round(stars * GIFT_CONVERT_RATE)),
+                    "upgrade_stars": int(round(stars * GIFT_CONVERT_RATE)),
+                    "note": "Конвертация в звёзды: %d ⭐ (85%%). Коллекционный — продажа за GRAM." %
+                            int(round(stars * GIFT_CONVERT_RATE))})
     out.sort(key=lambda x: (x["stars"], x["name"]))
     return out
 
@@ -1566,6 +1634,10 @@ async def api_stars(request):
                               "gifts": gift_catalog_view(),
                               "gift_window": gift_window_open(),
                               "fall_open": fall_window_open(),
+                              "market": gram_market(),
+                              "convert_rate": GIFT_CONVERT_RATE,
+                              "market": gram_market(),
+                              "convert_rate": GIFT_CONVERT_RATE,
                               "pool": {"distributable": int(_pp.get("active", 0)) + int(_pp.get("buyer", 0)),
                                        "stars": round((int(_pp.get("active", 0)) + int(_pp.get("buyer", 0))) / STAR_PACK, 2),
                                        "active": int(_pp.get("active", 0)),
@@ -1676,8 +1748,9 @@ TERMS_TEXT = {
                  "Осколки выпадают случайно, их количество не гарантировано."},
         {"title": "4. Обмен осколков на подарки",
          "body": "Обмен доступен с 1-го по 7-е число месяца, не чаще одного подарка в сутки на аккаунт. "
-                 "Подарок отправляется ботом в Telegram; получатель не может обменять его на Stars. "
-                 "Цена в осколках включает запас на изменение стоимости подарка."},
+                 "Подарок отправляется ботом в Telegram. Получатель может обменять его на Stars — "
+                 "Telegram возвращает 85% номинала, эти звёзды выводятся в GRAM через Fragment. "
+                 "Цена в осколках равна номиналу подарка: 10 осколков = 1 звезда."},
         {"title": "5. Конкурсы и розыгрыши",
          "body": "Условия участия в конкурсах, сроки, правила определения победителей и порядок "
                  "вручения призов публикуются в канале @podtekst_game перед началом каждого конкурса. "
@@ -1855,6 +1928,35 @@ def daily_pick(uid):
         _daily_state[key] = idx
     return _daily_state[key]
 
+QUIZ_RECENT_KEPT = 40          # сколько последних вопросов помним
+QUIZ_BLOCK_RECENT = 20         # столько последних вопросов не показываем снова
+
+
+def pick_fresh_question(acc):
+    """Выбрать вопрос, который игрок недавно не видел.
+
+    Раньше индекс брался чистым random.randrange, поэтому при банке в ~140
+    вопросов один и тот же вопрос выпадал трижды подряд. Теперь у каждого
+    игрока хранится история последних показов: вопрос из недавних не
+    предлагается, пока не проиграно QUIZ_BLOCK_RECENT других.
+    """
+    total = len(QUIZ_BANK)
+    if total <= 1:
+        return random.randrange(total)
+    st = acc.setdefault("quiz", {})
+    hist = [int(x) for x in (st.get("hist") or [])][-QUIZ_RECENT_KEPT:]
+    block = set(hist[-QUIZ_BLOCK_RECENT:])
+    pool = [i for i in range(total) if i not in block]
+    if not pool:
+        pool = [i for i in range(total) if i != (hist[-1] if hist else -1)]
+    if not pool:
+        pool = list(range(total))
+    idx = random.choice(pool)
+    st["hist"] = (hist + [idx])[-QUIZ_RECENT_KEPT:]
+    st["seen"] = int(st.get("seen", 0)) + 1
+    return idx
+
+
 async def api_quiz(request):
     try:
         body = await request.json()
@@ -1868,9 +1970,12 @@ async def api_quiz(request):
         return web.json_response({"error": "no user"}, status=401)
     mode = body.get("mode", "random")
     daily = (mode == "daily")
-    idx = daily_pick(uid) if daily else random.randrange(len(QUIZ_BANK))
-    q = QUIZ_BANK[idx]
     d = load_store(); acc = acc_of(d, uid)
+    if daily:
+        idx = daily_pick(uid)
+    else:
+        idx = pick_fresh_question(acc)
+    q = QUIZ_BANK[idx]
     chal = acc.setdefault("daily", {})
     today = today_key()
     if chal.get("date") != today:
