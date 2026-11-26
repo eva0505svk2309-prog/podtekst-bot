@@ -404,6 +404,15 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="starFallBox" style="font-size:13px;color:#9fb6d4;margin-bottom:6px"></div>
   <div id="starChance" style="font-size:13px;color:#9fb6d4"></div>
  </div>
+ <div class="card" style="margin-bottom:10px" id="freezeCard">
+  <div style="font-weight:800;margin-bottom:8px">❄️ Заморозка серии</div>
+  <div id="freezeState" style="font-size:13px;color:#9fb6d4;margin-bottom:8px"></div>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+   <button id="freezeShardsBtn" class="pri" style="flex:1">Докупить за осколки</button>
+   <button id="freezeStarsBtn" style="white-space:nowrap">За 50 ⭐</button>
+  </div>
+  <div class="small" style="margin-top:7px">Заморозка пропускает ровно один день и не обнуляет серию. Раз в неделю — бесплатная, ещё можно докупить за 100 осколков или 50 Stars.</div>
+ </div>
  <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">🎁 Витрина подарков</div>
   <div id="starGiftNote" class="small" style="margin-bottom:8px"></div>
@@ -413,6 +422,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div style="font-weight:800;margin-bottom:8px">🌠 Звездопад</div>
   <div id="fallText" class="small" style="margin-bottom:9px"></div>
   <button id="boostBtn" class="pri" style="width:100%">Купить «Звездопад+»</button>
+  <div id="boostNote" class="small" style="margin-top:7px"></div>
  </div>
  <div class="card">
   <div style="font-weight:800;margin-bottom:6px">Как это работает</div>
@@ -442,7 +452,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    </div>
    <div id="refStat" style="font-size:13px;color:#9fb6d4;margin-top:8px">
  <div id="refCoupon" class="small" style="display:none;margin-top:6px;color:#ffd76e"></div>Приглашено: 0 · до бонуса +100 🪙 осталось 3</div>
-   <div class="small" style="margin-top:6px">Друг пришёл → тебе +50 🪙, ему +20 🪙. Каждые 3 друга — ещё +100 🪙 и +1 💗.</div>
+   <div class="small" style="margin-top:6px">Друг пришёл → тебе +50 🪙 и 1 ⭐ осколков, ему 0.5 ⭐. Каждые 3 друга — ещё +100 🪙, +0.5 ⭐ и +1 💗. Осколки не копятся больше 3 ⭐ в сутки.</div>
   </div>
  </div>
  <div class="card" style="margin-bottom:10px" id="promoCard">
@@ -453,7 +463,7 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
    <button id="promoClaim" style="white-space:nowrap">+50 🪙</button>
   </div>
   <div class="small" style="margin-top:7px" id="promoNote">Бонус придёт сам, как только вернёшься в игру. Один раз.</div>
-  <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +15 🪙</button></div>
+  <div style="margin-top:9px"><button id="adBtn" style="width:100%">🎬 Посмотреть рекламу — +25 🪙</button></div>
   <div id="adOverlay" style="display:none;position:fixed;inset:0;background:rgba(6,2,16,.94);z-index:9999;align-items:center;justify-content:center;padding:18px;flex-direction:column">
    <div style="max-width:420px;width:100%">
     <div id="adClick" style="cursor:pointer;position:relative;border-radius:16px;overflow:hidden">
@@ -665,9 +675,17 @@ var LOC=(function(){
       /* Офлайн-режим: звёзды и подарки работают локально, без сервера. */
       if(path==="/api/stars"){
         var gifts=[
-          {id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:225},
-          {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:225},
-          {id:"g3",emoji:"🎁",name:"Подарок",stars:25,price:375}];
+          {id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:188},
+          {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:188},
+          {id:"g3",emoji:"🎁",name:"Коробка с бантом",stars:25,price:313},
+          {id:"g4",emoji:"🌹",name:"Красная роза",stars:25,price:313},
+          {id:"g5",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
+          {id:"g6",emoji:"💐",name:"Букет",stars:50,price:625},
+          {id:"g7",emoji:"🚀",name:"Ракета",stars:50,price:625},
+          {id:"g8",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
+          {id:"g9",emoji:"🏆",name:"Кубок",stars:100,price:1250},
+          {id:"g10",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
+          {id:"g11",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
         var today=new Date();var wd=today.getDay();
         var fallOpen=(wd===5&&today.getHours()>=18)||wd===6||wd===0;
         var giftOpen=today.getDate()<=7;
@@ -676,13 +694,23 @@ var LOC=(function(){
         return Promise.resolve({ok:true,shards:o.shards,stars:Math.round(o.shards/10*100)/100,
           fall_open:fallOpen,fall_next:fallOpen?"сейчас":"в пятницу",gift_open:giftOpen,
           gift_next:giftOpen?"сегодня":"в начале следующего месяца",boost_until:0,
-          chance:Math.round(chance*1000)/1000,gifts:gifts});
+          chance:Math.round(chance*1000)/1000,gifts:gifts,
+          boost_price:200,contributed:0,pool_earned:0,pool_cap:0,
+          pool:{distributable:0,stars:0,active:0,margin_pct:30,cap_mult:2}});
       }
       if(path==="/api/stars/gift"){
         var gid=body.gift_id;var g2=null;
-        var gl=[{id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:225},
-                {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:225},
-                {id:"g3",emoji:"🎁",name:"Подарок",stars:25,price:375}];
+        var gl=[{id:"g1",emoji:"💝",name:"Сердце с бантом",stars:15,price:188},
+                {id:"g2",emoji:"🧸",name:"Мишка",stars:15,price:188},
+                {id:"g3",emoji:"🎁",name:"Коробка с бантом",stars:25,price:313},
+                {id:"g4",emoji:"🌹",name:"Красная роза",stars:25,price:313},
+                {id:"g5",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
+                {id:"g6",emoji:"💐",name:"Букет",stars:50,price:625},
+                {id:"g7",emoji:"🚀",name:"Ракета",stars:50,price:625},
+                {id:"g8",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
+                {id:"g9",emoji:"🏆",name:"Кубок",stars:100,price:1250},
+                {id:"g10",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
+                {id:"g11",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
         for(var gi=0;gi<gl.length;gi++){if(gl[gi].id===gid)g2=gl[gi];}
         if(!g2)return Promise.resolve({ok:false,error:"unknown gift"});
         if(o.shards<g2.price)return Promise.resolve({ok:false,error:"not enough shards",need:g2.price,shards:o.shards});
@@ -690,7 +718,18 @@ var LOC=(function(){
         return Promise.resolve({ok:true,gift:{emoji:g2.emoji,name:g2.name},spent:g2.price,shards:o.shards});
       }
       if(path==="/api/stars/boost"){
-        return Promise.resolve({ok:true,sent:false,pack:"fall_boost",shards:o.shards});
+        return Promise.resolve({ok:true,sent:false,pack:"fall_boost",shards:o.shards,boost_price:200});
+      }
+      /* Заморозка серии: офлайн считаем локально, но цены — как на сервере. */
+      if(path==="/api/freeze"){
+        o.freeze=o.freeze||{tokens:0};
+        if(body&&body.action==="buy_shards"){
+          if(o.freeze.tokens>=3)return Promise.resolve({ok:false,error:"max",max:3,tokens:o.freeze.tokens});
+          if((o.shards||0)<100)return Promise.resolve({ok:false,error:"not enough shards",need:100,tokens:o.freeze.tokens});
+          o.shards-=100;o.freeze.tokens+=1;save(o);
+          return Promise.resolve({ok:true,spent:100,tokens:o.freeze.tokens,shards:o.shards});
+        }
+        return Promise.resolve({ok:true,tokens:o.freeze.tokens,max:3,cost_shards:100,cost_stars:50,shards:o.shards});
       }
       if(path==="/api/cards"){
         if(body.action==="state"){
@@ -1192,6 +1231,13 @@ async function loadStars(){
   $("fallText").textContent = j.fall_open
    ? "Окно Звездопада открыто — осколки падают чаще. Бустер «Звездопад+» добавляет ещё +80% к шансу на 3 дня."
    : "Следующее окно — "+j.fall_next+". В это время шанс дропа удваивается.";
+  var bp=j.boost_price||200;
+  var bt=$("boostBtn"); if(bt) bt.textContent="Купить «Звездопад+» — "+bp+" ⭐";
+  var bn=$("boostNote");
+  if(bn){
+   var poolTxt=(j.pool&&j.pool.stars!=null)?(" В общий пул уходит "+Math.round(j.pool.stars*10)+" осколков, "+j.pool.margin_pct+"% остаётся проекту."):"";
+   bn.textContent="Цена "+bp+" ⭐. Ты вносишь осколки в общий пул и получаешь гарантированный возврат 35% взноса осколками"+poolTxt;
+  }
   $("starGiftNote").textContent = j.gift_open
    ? "Обмен открыт. Один подарок в сутки, осколки списываются после отправки."
    : "Обмен откроется "+j.gift_next+" (1-е..7-е число месяца).";
@@ -1236,9 +1282,44 @@ async function loadStars(){
 document.getElementById("boostBtn").onclick=async function(){
  var b=this;b.disabled=true;b.textContent="Отправляю…";
  var j=await api2("/api/stars/boost",{});
- b.disabled=false;b.textContent="Купить «Звездопад+»";
+ b.disabled=false;
+ var bprice=STAR&&STAR.boost_price?STAR.boost_price:200;
+ b.textContent="Купить «Звездопад+» — "+bprice+" ⭐";
  if(j&&j.ok){toast("Покупка отправлена — подтверди в Telegram");}
  else{toast("Не получилось купить бустер");}
+};
+
+/* ---------- ЗАМОРОЗКА СЕРИИ ---------- */
+async function loadFreeze(){
+ var j=await api2("/api/freeze",{action:"state"});
+ if(!j||!j.ok)return;
+ var box=$("freezeState"); if(box){
+  var t=j.tokens||0, mx=j.max||3;
+  box.textContent="В запасе: "+t+" из "+mx+" заморозок. Докупка за "+(j.cost_shards||100)+" осколков или "+(j.cost_stars||50)+" Stars.";
+ }
+ var sb=$("freezeShardsBtn"), stb=$("freezeStarsBtn");
+ var can=typeof j.shards==="number" && j.shards>=(j.cost_shards||100);
+ if(sb){ sb.disabled=!can; sb.textContent="Докупить за "+(j.cost_shards||100)+" ✨"; }
+ if(stb){ stb.textContent="За "+(j.cost_stars||50)+" ⭐"; }
+ if(typeof j.shards==="number"){S.shards=j.shards;try{$("starCount").textContent=S.shards;}catch(e){}}
+}
+if($("freezeShardsBtn"))$("freezeShardsBtn").onclick=async function(){
+ var b=this;b.disabled=true;b.textContent="…";
+ var j=await api2("/api/freeze",{action:"buy_shards"});
+ b.disabled=false;
+ if(j&&j.ok){
+  if(typeof j.shards==="number"){S.shards=j.shards;try{$("starCount").textContent=S.shards;}catch(e){}}
+  toast("❄️ Заморозка куплена: "+j.tokens+" в запасе");
+  loadFreeze();
+ }else{
+  var m="Не хватило осколков";
+  if(j&&j.error==="max")m="Заморозок уже максимум ("+(j.max||3)+")";
+  else if(j&&j.need)m="Нужно "+j.need+" ✨ осколков";
+  toast(m);
+ }
+};
+if($("freezeStarsBtn"))$("freezeStarsBtn").onclick=function(){
+ try{ botCmd("buy:freeze_stars"); }catch(e){ toast("Не удалось открыть бота"); }
 };
 
 /* ---------- tabs ---------- */
@@ -1250,7 +1331,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  if(b.dataset.v==='m3' && (!grid || !grid.length)){ try{ startLevel(); }catch(e){} }
  if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); try{initReferral();}catch(e){} try{initContest();}catch(e){} loadBP(); try{loadLeaderboard();}catch(e){} }
  if(b.dataset.v==='cards'){ loadCards(); loadTourney(); }
- if(b.dataset.v==='stars'){ loadStars(); }
+ if(b.dataset.v==='stars'){ loadStars(); try{loadFreeze();}catch(e){} }
 });
 
 /* ---------- QUIZ (server-authoritative) ---------- */
@@ -1902,12 +1983,12 @@ function initReferral(){
   adOv.style.display="flex";
   var left=5;
   if(adCnt) adCnt.textContent="Реклама через "+left+"…";
-  if(adSub) adSub.textContent="Досмотри до конца — получишь +15 🪙";
+  if(adSub) adSub.textContent="Досмотри до конца — получишь +25 🪙 и осколки";
   await new Promise(function(res){ var tm=setInterval(function(){
     left--; if(adCnt) adCnt.textContent=left>0?("Реклама через "+left+"…"):"Можно забирать монеты!";
     if(left<=0){clearInterval(tm);res();}
   },1000); });
-  if(adSub) adSub.textContent="Плюс 15 🪙 начисляем…";
+  if(adSub) adSub.textContent="Плюс 25 🪙 начисляем…";
   return true;
  }
  if(ad) ad.onclick=async function(){
@@ -1915,8 +1996,10 @@ function initReferral(){
   var watched=await showAd();
   if(!watched){ toast("Реклама сейчас недоступна"); return; }
   var j=await api2("/api/ad/reward",{});
-  if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙"; toast("Начислено +"+j.reward+" 🪙");
+  if(j&&j.ok&&j.reward){ ad.textContent="🎬 Ещё одна реклама — +"+j.reward+" 🪙";
+   toast("Начислено +"+j.reward+" 🪙"+(j.shards?(" и +"+j.shards+" ✨"):""));
    if(typeof j.coins==="number"){S.coins=j.coins;paint();}
+   if(typeof j.shards==="number"){S.shards=j.shards;paint();try{$("starCount").textContent=S.shards;}catch(e){}}
    var an=$("adNote"); if(an&&typeof j.left==="number") an.textContent="Осталось просмотров сегодня: "+j.left;
    if(adOv) adOv.style.display="none";
   } else if(j&&j.error==="ad limit"){ ad.disabled=true; ad.textContent="Реклама на сегодня закончилась";
@@ -2093,7 +2176,7 @@ $("ts").textContent="v3.4";
    if(j&&j.subscribed){
     var b=subBtn(); if(b){b.textContent="✓ Вы подписаны"; b.style.background="#2ea043"; b.disabled=true;}
     var s=subStatus(); if(s){s.style.display="block"; s.innerHTML=(j.reward?("Начислено <b style='color:#ffd76a'>+"+j.reward+" 🪙</b> — зачислено в кошелёк."):"Подписка подтверждена, бонус уже получен.");}
-    if(j.coins&&typeof j.coins==="number"){S.coins=j.coins; try{renderWallet&&renderWallet();}catch(e){}}
+    if(j.coins&&typeof j.coins==="number"){S.coins=j.coins; try{paint();}catch(e){}}
    } else {
     var s2=subStatus(); if(s2){s2.style.display="block"; s2.textContent="Подпишись на канал @podtekst_game и нажми «Проверить» — бонус придёт сразу.";}
    }
