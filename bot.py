@@ -153,7 +153,9 @@ FALL_BOOST_PACK_TTL = 86400 * 3  # 3 дня
 # бустера перетекают к активным игрокам; часть пула остаётся проекту.
 # Ключевое требование: и мы в плюсе, и активные игроки в плюсе.
 POOL_MARGIN = 0.20              # 20% вклада остаётся проекту (гарантированный плюс)
-POOL_EVENT_RATE = 0.02          # в среднем 6% остатка пула выплачивается за событие
+POOL_ACTIVE_SHARE = 0.60        # 60% распределяемого пула -> общий котёл для ВСЕХ игроков
+POOL_BUYER_SHARE = 0.40         # 40% -> котёл покупателей бустера (с потолком 166%)
+POOL_EVENT_RATE = 0.02          # в среднем 2% остатка пула выплачивается за событие
 POOL_RAND_LO = 0.6              # нижняя граница рендома выплаты
 POOL_RAND_HI = 1.4              # верхняя граница рендома выплаты
 POOL_BUYER_CAP = 1.667          # покупатель может выиграть из пула максимум 1.667x своего взноса
@@ -168,14 +170,20 @@ def _pool_load():
         with open(_pool_path(), encoding="utf-8") as f:
             p = json.load(f)
         if isinstance(p, dict):
-            p.setdefault("distributable", 0)
+            p.setdefault("active", 0)
+            p.setdefault("buyer", 0)
             p.setdefault("margin", 0)
             p.setdefault("contrib", {})
             p.setdefault("earned", {})
+            # Миграция со старой однокотловой модели.
+            if "distributable" in p:
+                d = int(p.pop("distributable", 0) or 0)
+                p["active"] = int(p.get("active", 0)) + int(d * POOL_ACTIVE_SHARE)
+                p["buyer"] = int(p.get("buyer", 0)) + d - int(d * POOL_ACTIVE_SHARE)
             return p
     except Exception:
         pass
-    return {"distributable": 0, "margin": 0, "contrib": {}, "earned": {}}
+    return {"active": 0, "buyer": 0, "margin": 0, "contrib": {}, "earned": {}}
 
 def _pool_save(p):
     try:
@@ -188,89 +196,68 @@ def _pool_save(p):
         logging.warning("pool save failed: %s", e)
 
 def pool_contribute(uid, stars_paid):
-    """Взнос в пул: 80% — активным игрокам, 20% — проект."""
+    """Взнос в пул: 80% игрокам (60% общий котёл + 40% котёл покупателей), 20% проект."""
     units = int(stars_paid) * STAR_PACK
     dist = int(round(units * (1.0 - POOL_MARGIN)))
     margin = units - dist
     p = _pool_load()
-    p["distributable"] = int(p.get("distributable", 0)) + dist
+    to_active = int(round(dist * POOL_ACTIVE_SHARE))
+    to_buyer = dist - to_active
+    p["active"] = int(p.get("active", 0)) + to_active
+    p["buyer"] = int(p.get("buyer", 0)) + to_buyer
     p["margin"] = int(p.get("margin", 0)) + margin
     p["contrib"][str(uid)] = int(p["contrib"].get(str(uid), 0)) + units
     _pool_save(p)
     return dist, margin
 
-def pool_payout(acc, reason="event"):
-    """Выплата из общего пула активному игроку. Возвращает выплаченные единицы.
+def _pool_activity(acc):
+    """Вес активности: серия дней и активный бустер."""
+    a = 1.0 + min(1.0, int(acc.get("streak", 0) or 0) / 10.0)
+    st = acc.get("star") or {}
+    if int(st.get("boost_until", 0)) > int(time.time()):
+        a *= 1.8
+    return a
 
-    Рандом сохранён: выплата = остаток пула * ставка * рендом * вес активности.
-    Покупатель бустера не может выиграть из пула больше POOL_BUYER_CAP от
-    своего взноса; излишек остаётся в пуле и уходит другим игрокам.
-    """
+def pool_payout(acc, reason="event"):
+    """Выплата из общего пула активному игроку.
+
+    Общий котёл (60%) делится между ВСЕМИ активными игроками — выигрывают и те,
+    кто бустер не покупал. Котёл покупателей (40%) — только для купивших, и с
+    потолком POOL_BUYER_CAP от взноса. Возвращает выплаченные единицы."""
     p = _pool_load()
-    remaining = int(p.get("distributable", 0))
-    if remaining <= 0:
-        return 0
     uid = str(acc.get("uid") or "")
     st = acc.setdefault("star", {})
-    # Потолок для покупателя: не больше 1.667x своего взноса.
     contributed = int(st.get("contributed", 0))
     earned = int(st.get("pool_earned", 0))
-    cap = int(contributed * POOL_BUYER_CAP) if contributed else 10 ** 9
-    allowed = cap - earned
+    allowed_total = int(contributed * POOL_BUYER_CAP) if contributed else 10 ** 9
+    allowed = allowed_total - earned
     if allowed <= 0:
         return 0
-    # Вес активности: серия дней и участие в игре.
-    activity = 1.0 + min(1.0, int(acc.get("streak", 0) or 0) / 10.0)
-    if int(st.get("boost_until", 0)) > int(time.time()):
-        activity *= 1.8
     mult = random.uniform(POOL_RAND_LO, POOL_RAND_HI)
-    share = int(remaining * POOL_EVENT_RATE * mult * activity)
-    share = max(POOL_MIN_SHARE, share)
-    share = min(share, remaining, allowed)
-    if share <= 0:
+    activity = _pool_activity(acc)
+    total = 0
+    act = int(p.get("active", 0))
+    if act > 0:
+        s1 = int(act * POOL_EVENT_RATE * mult * activity)
+        s1 = max(0, min(s1, act, allowed - total))
+        if s1 > 0:
+            p["active"] = act - s1
+            total += s1
+    if contributed > 0 and total < allowed:
+        by = int(p.get("buyer", 0))
+        if by > 0:
+            s2 = int(by * POOL_EVENT_RATE * mult * activity)
+            s2 = max(0, min(s2, by, allowed - total))
+            if s2 > 0:
+                p["buyer"] = by - s2
+                total += s2
+    if total <= 0:
         return 0
-    p["distributable"] = remaining - share
-    p.setdefault("earned", {})[uid] = int(p["earned"].get(uid, 0)) + share
+    p.setdefault("earned", {})[uid] = int(p["earned"].get(uid, 0)) + total
     _pool_save(p)
-    st["pool_earned"] = earned + share
-    shards_add(acc, share, "pool:" + reason)
-    return share
-
-# Окно обмена на подарки: раз в месяц, 1-е..7-е число.
-GIFT_WINDOW_DAYS = 7
-GIFT_COOLDOWN = 86400           # 1 подарок в сутки на аккаунт
-
-# Рефералка -> звезда. Не просто «приведи друга»: нужна подписка на канал
-# у приглашённого, иначе это чистый фарм.
-REF_SHARD_INVITER = 5           # 0.5 звезды пригласившему
-REF_SHARD_NEW = 3               # 0.3 звезды новому
-REF_DAILY_CAP = 10              # максимум осколков с рефералки в сутки
-
-# Рефералка: запрет на «пригласил и сразу отписался» — бот смотрит подписку
-# пригласившего в момент начисления и повторно при выдаче.
-REF_SUB_REQUIRED = True
-
-# Витрина подарков: id -> (эмодзи, название, номинал в Stars, осколков)
-GIFT_CATALOG = {
-    "5170145012310081615": ("💝", "Сердце с бантом", 15, 15),
-    "5170233102089322756": ("🧸", "Мишка", 15, 15),
-    "5170250947678437525": ("🎁", "Коробка с бантом", 25, 25),
-    "5168103777563050263": ("🌹", "Красная роза", 25, 25),
-    "5170144170496491616": ("🎂", "Торт ко дню рождения", 50, 50),
-    "5170314324215857265": ("💐", "Букет", 50, 50),
-    "5170564780938756245": ("🚀", "Ракета", 50, 50),
-    "6028601630662853006": ("🍾", "Бутылка шампанского", 50, 50),
-    "5168043875654172773": ("🏆", "Кубок", 100, 100),
-    "5170690322832818290": ("💍", "Кольцо с бриллиантом", 100, 100),
-    "5170521118301225164": ("💎", "Алмаз", 100, 100),
-}
-# Сколько звёзд бот тратит на подарок (номинал Telegram). Столько же нужно
-# отдать игроку осколками + запас на просадку курса при перепродаже.
-GIFT_MARGIN = 1.25
-
-# Новогодняя тематика: подарки с seasonally-меткой (сезонная витрина).
-GIFT_SEASON = {"🎂", "🎁", "🚀", "🍾", "💝"}
-
+    st["pool_earned"] = earned + total
+    shards_add(acc, total, "pool:" + reason)
+    return total
 
 def _now():
     return int(time.time())
@@ -869,7 +856,10 @@ def revoke(user_id, payload):
         st["contributed"] = max(0, int(st.get("contributed", 0)) - units)
         pp = _pool_load()
         back = int(round(units * (1.0 - POOL_MARGIN)))
-        pp["distributable"] = max(0, int(pp.get("distributable", 0)) - back)
+        to_active = int(round(back * POOL_ACTIVE_SHARE))
+        to_buyer = back - to_active
+        pp["active"] = max(0, int(pp.get("active", 0)) - to_active)
+        pp["buyer"] = max(0, int(pp.get("buyer", 0)) - to_buyer)
         pp["margin"] = max(0, int(pp.get("margin", 0)) - (units - back))
         _pool_save(pp)
         return True
@@ -1435,8 +1425,9 @@ async def api_stars(request):
                               "gifts": gift_catalog_view(),
                               "gift_window": gift_window_open(),
                               "fall_open": fall_window_open(),
-                              "pool": {"distributable": int(_pp.get("distributable", 0)),
-                                       "stars": round(int(_pp.get("distributable", 0)) / STAR_PACK, 2),
+                              "pool": {"distributable": int(_pp.get("active", 0)) + int(_pp.get("buyer", 0)),
+                                       "stars": round((int(_pp.get("active", 0)) + int(_pp.get("buyer", 0))) / STAR_PACK, 2),
+                                       "active": int(_pp.get("active", 0)),
                                        "margin_pct": int(POOL_MARGIN * 100),
                                        "cap_mult": POOL_BUYER_CAP},
                               "boost_price": PACK_FALL_BOOST})
@@ -3613,6 +3604,10 @@ PET_STAGES = [
     {"n": 5, "name": "Легенда",      "emoji": "\U0001F985", "xp": 1500},
 ]
 PET_XP = {"quiz": 12, "m3": 30, "day": 15, "duel": 20}
+# Прокачка стадии питомца за осколки: цена в десятых звезды (10 = 1 звезда).
+# Стадия 2 -> 3, 3 -> 4, 4 -> 5. Цены растут: чем дальше, тем дороже.
+PET_STAGE_UP = {2: 120, 3: 260, 4: 600}   # осколков (десятых) за следующую стадию
+PET_STAGE_UP_MAX = 5                       # выше 5-й стадии прокачки нет
 PET_DECAY_HOUR = 5
 PET_ACTION_GAIN = 40
 PET_HATCH_TAPS = 5
@@ -3716,6 +3711,9 @@ def pet_view(acc):
             "power": pet_power(p, acc),
             "cd": p.get("cd", {}),
             "actions": PET_ACTIONS,
+            "stage_up_cost": PET_STAGE_UP.get(stage, 0),
+            "stage_up_stage": stage,
+            "stage_max": PET_STAGE_UP_MAX,
             "now": int(time.time())}
 
 
@@ -3753,6 +3751,12 @@ def _pet_roll_species():
     return PET_SPECIES[0]
 
 
+def pet_stage_up_cost(p):
+    """Цена прокачки текущей стадии питомца в осколках (десятых звезды)."""
+    stage = pet_stage_for(int(p.get("xp", 0)), bool(p.get("species")))
+    return PET_STAGE_UP.get(stage, 0), stage
+
+
 async def api_pet(request):
     """Питомец: состояние, вылупление, уход (кормление/игра/мытьё/сон)."""
     try:
@@ -3787,6 +3791,42 @@ async def api_pet(request):
         save_store(d)
         return web.json_response({"ok": True, "hatched": False,
                                   "pet": pet_view(acc)})
+
+    if action == "upgrade":
+        # Прокачка стадии питомца за осколки. Стадия растёт мгновенно,
+        # но только если хватает осколков — и только до 5-й стадии.
+        if not p.get("species"):
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not hatched",
+                                      "pet": pet_view(acc)})
+        cost, stage = pet_stage_up_cost(p)
+        if stage >= PET_STAGE_UP_MAX:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "max stage",
+                                      "pet": pet_view(acc)})
+        if cost <= 0:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "max stage",
+                                      "pet": pet_view(acc)})
+        have = shards_of(acc)
+        if have < cost:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "not enough shards",
+                                      "have": have, "need": cost,
+                                      "pet": pet_view(acc), **wallet_view(acc)})
+        shards_add(acc, -cost, "pet_stage")
+        # Даём XP до следующей стадии с запасом: ровно до порога.
+        target = PET_STAGES[stage]["xp"]
+        old = pet_stage_for(int(p.get("xp", 0)), True)
+        p["xp"] = max(int(p.get("xp", 0)), target)
+        new = pet_stage_for(int(p["xp"]), True)
+        p["stage"] = new
+        if new > old:
+            p["shields"] = int(p.get("shields", 1)) + 1
+        save_store(d)
+        return web.json_response({"ok": True, "stage": new,
+                                  "cost": cost, "pet": pet_view(acc),
+                                  **wallet_view(acc)})
 
     if action == "care":
         key = str(body.get("kind", ""))
