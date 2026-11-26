@@ -563,7 +563,9 @@ async def stars(message: types.Message):
 async def help_(message: types.Message):
     await message.answer("/start — играть\n/buy — купить монеты\n/stars — цены\n"
                          "/referral — ссылка для друзей\n"
-                         "/mira — ИИ-помощник Mira + бонус в игре",
+                         "/mira — ИИ-помощник Mira + бонус в игре\n"
+                         "/starbalance — баланс звёзд (бота и аккаунта)\n"
+                         "/transferstars 500 — перевести 500 звёзд боту",
                          reply_markup=kb())
 
 @dp.message(Command("buy"))
@@ -801,6 +803,123 @@ async def refundlast(message: types.Message):
         await message.answer("Звезда возвращена на твой баланс, товар за неё отобран.")
     else:
         await message.answer("Звезда возвращена на твой баланс.")
+
+# ================= БИЗНЕС-ПОДКЛЮЧЕНИЕ: ПЕРЕВОД STARS БОТУ =================
+# Telegram не даёт боту забрать Stars с аккаунта пользователя напрямую.
+# Единственный путь — бизнес-подключение: пользователь подключает свой
+# аккаунт боту (BotFather → Business), и тогда по business_connection_id
+# можно перевести Stars с баланса аккаунта на баланс бота.
+# Подключение хранится в store.json, чтобы переживать перезапуски.
+
+def biz_conn_key(user_id):
+    return "bizconn:" + str(user_id)
+
+
+def save_biz_conn(user_id, conn_id, rights=None):
+    d = load_store()
+    d[biz_conn_key(user_id)] = {"conn": conn_id, "rights": rights or {},
+                                "ts": int(time.time())}
+    save_store(d)
+
+
+def get_biz_conn(user_id):
+    d = load_store()
+    rec = d.get(biz_conn_key(user_id)) or {}
+    return rec.get("conn")
+
+
+@dp.business_connection()
+async def on_business_connection(event):
+    """Telegram прислал бизнес-подключение: сохраняем его id."""
+    bc = event.business_connection
+    rights = bc.rights
+    can_transfer = False
+    try:
+        can_transfer = bool(rights.can_transfer_stars) if rights else False
+    except Exception:
+        can_transfer = False
+    save_biz_conn(bc.user.id, bc.id, {"can_transfer_stars": can_transfer})
+    logging.info("BUSINESS_CONN user=%s id=%s can_transfer=%s",
+                 bc.user.id, bc.id, can_transfer)
+    try:
+        await event.answer(
+            "Бизнес-подключение принято. Теперь перевести звёзды можно командой /transferstars.",
+            reply_markup=kb())
+    except Exception:
+        pass
+
+
+@dp.message(Command("transferstars"))
+async def transferstars(message: types.Message):
+    """Перевод Stars с аккаунта пользователя на баланс бота (нужно бизнес-подключение)."""
+    conn = get_biz_conn(message.from_user.id)
+    if not conn:
+        await message.answer(
+            "Сначала нужно бизнес-подключение.\n\n"
+            "В @BotFather: /mybots → @podtekst_game_bot → Business → включи "
+            "и подключи аккаунт. После этого вернись сюда и повтори команду.",
+            reply_markup=kb())
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Сколько звёзд перевести? Формат: /transferstars 500")
+        return
+    try:
+        count = int(args[1])
+    except ValueError:
+        await message.answer("Нужно целое число. Формат: /transferstars 500")
+        return
+    if count < 1 or count > 10000:
+        await message.answer("Перевести можно от 1 до 10000 звёзд за раз.")
+        return
+    try:
+        bal = await bot.get_business_account_star_balance(business_connection_id=conn)
+        have = int(getattr(bal, "amount", 0) or 0)
+    except Exception as e:
+        logging.warning("biz balance failed: %s", e)
+        await message.answer(f"Не получилось прочитать баланс: {e}")
+        return
+    if have < count:
+        await message.answer(
+            f"На аккаунте {have} звёзд, а перевести нужно {count}. "
+            "Пополни баланс звёзд и повтори.")
+        return
+    try:
+        ok = await bot.transfer_business_account_stars(
+            business_connection_id=conn, star_count=count)
+    except Exception as e:
+        logging.warning("transfer stars failed: %s", e)
+        await message.answer(f"Перевод не прошёл: {e}")
+        return
+    logging.info("TRANSFER_STARS user=%s count=%s ok=%s", message.from_user.id, count, ok)
+    try:
+        mine = await bot.get_my_star_balance()
+        mine_amt = int(getattr(mine, "amount", 0) or 0)
+    except Exception:
+        mine_amt = None
+    tail = f"\nБаланс бота теперь: {mine_amt} ⭐" if mine_amt is not None else ""
+    await message.answer(f"Перевела {count} ⭐ на баланс бота.{tail}", reply_markup=kb())
+
+
+@dp.message(Command("starbalance"))
+async def starbalance(message: types.Message):
+    """Баланс Stars: свой, бота и подключения."""
+    try:
+        mine = await bot.get_my_star_balance()
+        mine_amt = int(getattr(mine, "amount", 0) or 0)
+    except Exception as e:
+        mine_amt = f"ошибка: {e}"
+    conn = get_biz_conn(message.from_user.id)
+    acc_line = "бизнес-подключения нет"
+    if conn:
+        try:
+            bal = await bot.get_business_account_star_balance(business_connection_id=conn)
+            acc_line = f"на аккаунте: {int(getattr(bal, 'amount', 0) or 0)} ⭐"
+        except Exception as e:
+            acc_line = f"подключение есть, но баланс не прочитать: {e}"
+    await message.answer(
+        f"Баланс бота: {mine_amt} ⭐\n{acc_line}", reply_markup=kb())
+
 
 @dp.message(lambda m: m.content_type == types.ContentType.WEB_APP_DATA)
 async def app_data(message: types.Message):
