@@ -124,7 +124,7 @@ PACKS = {
     "coins_100_ref": (80, "100 монет (по рефералке)"),
     # Бустер «Звездопад+»: +80% к шансу выпадения осколка и +25% к силе
     # питомца на 3 дня.
-    "fall_boost": (50, "Звездопад+ на 3 дня"),
+    "fall_boost": (300, "Звездопад+ на 3 дня — взнос в общий пул осколков"),
 }
 REF_COUPON_PACK = "coins_100_ref"
 
@@ -145,8 +145,96 @@ FALL_BOOST_MULT = 2             # множитель шанса в окне
 FALL_BASE_CHANCE = 0.35         # базовый шанс выпадения осколка за событие
 
 # Пакет «Звездопад+»: платный бустер (Stars -> шанс дропа + сила питомца)
-PACK_FALL_BOOST = 50            # 50 Stars
+PACK_FALL_BOOST = 300           # 300 Stars
 FALL_BOOST_PACK_TTL = 86400 * 3  # 3 дня
+
+# ================= ПУЛ ОСКОЛКОВ =================
+# Бустер — это не «множитель шанса», а ВЗНОС В ОБЩИЙ ПУЛ. Деньги покупателей
+# бустера перетекают к активным игрокам; часть пула остаётся проекту.
+# Ключевое требование: и мы в плюсе, и активные игроки в плюсе.
+POOL_MARGIN = 0.20              # 20% вклада остаётся проекту (гарантированный плюс)
+POOL_EVENT_RATE = 0.02          # в среднем 6% остатка пула выплачивается за событие
+POOL_RAND_LO = 0.6              # нижняя граница рендома выплаты
+POOL_RAND_HI = 1.4              # верхняя граница рендома выплаты
+POOL_BUYER_CAP = 1.667          # покупатель может выиграть из пула максимум 1.667x своего взноса
+                                 # (потратил 300 -> может заработать до 500)
+POOL_MIN_SHARE = 1              # минимальная выплата, единицы = десятые звезды
+
+def _pool_path():
+    return os.path.join(os.path.dirname(STORE) or ".", "pool.json")
+
+def _pool_load():
+    try:
+        with open(_pool_path(), encoding="utf-8") as f:
+            p = json.load(f)
+        if isinstance(p, dict):
+            p.setdefault("distributable", 0)
+            p.setdefault("margin", 0)
+            p.setdefault("contrib", {})
+            p.setdefault("earned", {})
+            return p
+    except Exception:
+        pass
+    return {"distributable": 0, "margin": 0, "contrib": {}, "earned": {}}
+
+def _pool_save(p):
+    try:
+        _store_dir()
+        tmp = _pool_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(p, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _pool_path())
+    except Exception as e:
+        logging.warning("pool save failed: %s", e)
+
+def pool_contribute(uid, stars_paid):
+    """Взнос в пул: 80% — активным игрокам, 20% — проект."""
+    units = int(stars_paid) * STAR_PACK
+    dist = int(round(units * (1.0 - POOL_MARGIN)))
+    margin = units - dist
+    p = _pool_load()
+    p["distributable"] = int(p.get("distributable", 0)) + dist
+    p["margin"] = int(p.get("margin", 0)) + margin
+    p["contrib"][str(uid)] = int(p["contrib"].get(str(uid), 0)) + units
+    _pool_save(p)
+    return dist, margin
+
+def pool_payout(acc, reason="event"):
+    """Выплата из общего пула активному игроку. Возвращает выплаченные единицы.
+
+    Рандом сохранён: выплата = остаток пула * ставка * рендом * вес активности.
+    Покупатель бустера не может выиграть из пула больше POOL_BUYER_CAP от
+    своего взноса; излишек остаётся в пуле и уходит другим игрокам.
+    """
+    p = _pool_load()
+    remaining = int(p.get("distributable", 0))
+    if remaining <= 0:
+        return 0
+    uid = str(acc.get("uid") or "")
+    st = acc.setdefault("star", {})
+    # Потолок для покупателя: не больше 1.667x своего взноса.
+    contributed = int(st.get("contributed", 0))
+    earned = int(st.get("pool_earned", 0))
+    cap = int(contributed * POOL_BUYER_CAP) if contributed else 10 ** 9
+    allowed = cap - earned
+    if allowed <= 0:
+        return 0
+    # Вес активности: серия дней и участие в игре.
+    activity = 1.0 + min(1.0, int(acc.get("streak", 0) or 0) / 10.0)
+    if int(st.get("boost_until", 0)) > int(time.time()):
+        activity *= 1.8
+    mult = random.uniform(POOL_RAND_LO, POOL_RAND_HI)
+    share = int(remaining * POOL_EVENT_RATE * mult * activity)
+    share = max(POOL_MIN_SHARE, share)
+    share = min(share, remaining, allowed)
+    if share <= 0:
+        return 0
+    p["distributable"] = remaining - share
+    p.setdefault("earned", {})[uid] = int(p["earned"].get(uid, 0)) + share
+    _pool_save(p)
+    st["pool_earned"] = earned + share
+    shards_add(acc, share, "pool:" + reason)
+    return share
 
 # Окно обмена на подарки: раз в месяц, 1-е..7-е число.
 GIFT_WINDOW_DAYS = 7
@@ -309,6 +397,9 @@ def star_view(acc):
         "gift_next": gift_window_next_text(),
         "boost_until": int(st.get("boost_until", 0)),
         "chance": round(star_chance_for(acc), 3),
+        "contributed": int(st.get("contributed", 0)),
+        "pool_earned": int(st.get("pool_earned", 0)),
+        "pool_cap": int(int(st.get("contributed", 0)) * POOL_BUYER_CAP),
     }
 
 
@@ -716,6 +807,13 @@ def grant(user_id, payload):
         acc = acc_of(d, user_id)
         st = acc.setdefault("star", {})
         st["boost_until"] = max(int(st.get("boost_until", 0)), int(time.time()) + FALL_BOOST_PACK_TTL)
+        # Взнос в общий пул: 80% — активным игрокам, 20% — проект.
+        stars_paid = PACKS.get("fall_boost", (PACK_FALL_BOOST, ""))[0]
+        _dist, _margin = pool_contribute(user_id, stars_paid)
+        st["contributed"] = int(st.get("contributed", 0)) + int(stars_paid) * STAR_PACK
+        st["pool_earned"] = int(st.get("pool_earned", 0))
+        logging.info("POOL contrib user=%s stars=%s dist=%s margin=%s",
+                     user_id, stars_paid, _dist, _margin)
     elif payload == "contest_entry":
         acc = acc_of(d, user_id)
         tier = active_tier(acc)
@@ -763,7 +861,18 @@ def revoke(user_id, payload):
         acc["noads"] = False; return True
     if payload == "fall_boost":
         st = acc.setdefault("star", {})
-        st["boost_until"] = 0; return True
+        st["boost_until"] = 0
+        # Возвращаем взнос из общего пула: 80% возвращается в пул, 20% — маржа
+        # проекта (её Telegram возвращает как Stars на баланс бота, а не нам).
+        stars_paid = PACKS.get("fall_boost", (PACK_FALL_BOOST, ""))[0]
+        units = int(stars_paid) * STAR_PACK
+        st["contributed"] = max(0, int(st.get("contributed", 0)) - units)
+        pp = _pool_load()
+        back = int(round(units * (1.0 - POOL_MARGIN)))
+        pp["distributable"] = max(0, int(pp.get("distributable", 0)) - back)
+        pp["margin"] = max(0, int(pp.get("margin", 0)) - (units - back))
+        _pool_save(pp)
+        return True
     if payload == "contest_entry":
         tier = active_tier(acc)
         if tier:
@@ -1079,7 +1188,8 @@ def acc_of(d, uid):
     acc.setdefault("charges", [])
     acc.setdefault("invited", 0)
     # Осколки звёзд. shards — целые десятые; 10 = одна звезда.
-    acc.setdefault("star", {"shards": 0, "boost_until": 0})
+    acc.setdefault("star", {"shards": 0, "boost_until": 0, "contributed": 0, "pool_earned": 0})
+    acc["uid"] = str(uid)
     # ВАЖНО: если отметки регенерации не было, выставляем текущее время.
     # Раньше стоял 0, и regen_lives сразу начислял 9 жизней — урон от атак
     # не держался вообще.
@@ -1320,10 +1430,16 @@ async def api_stars(request):
         return web.json_response({"error": "no user"}, status=401)
     d = load_store(); acc = acc_of(d, uid)
     save_store(d)
+    _pp = _pool_load()
     return web.json_response({"ok": True, **star_view(acc),
                               "gifts": gift_catalog_view(),
                               "gift_window": gift_window_open(),
-                              "fall_open": fall_window_open()})
+                              "fall_open": fall_window_open(),
+                              "pool": {"distributable": int(_pp.get("distributable", 0)),
+                                       "stars": round(int(_pp.get("distributable", 0)) / STAR_PACK, 2),
+                                       "margin_pct": int(POOL_MARGIN * 100),
+                                       "cap_mult": POOL_BUYER_CAP},
+                              "boost_price": PACK_FALL_BOOST})
 
 
 async def api_gift_buy(request):
@@ -1400,6 +1516,81 @@ async def api_fall_boost(request):
     return web.json_response({"ok": True, "sent": True, "pack": "fall_boost"})
 
 
+TERMS_VERSION = "1.0"
+
+TERMS_TEXT = {
+    "version": TERMS_VERSION,
+    "updated": "2026-11-26",
+    "sections": [
+        {"title": "1. Что такое ПОДТЕКСТ",
+         "body": "Это бесплатная игра-викторина в Telegram. Игровые предметы (монеты, осколки, "
+                 "питомец, карточки) не имеют реальной денежной стоимости и не могут быть "
+                 "обменяны на деньги вне игры. Единственное, что можно приобрести за реальные "
+                 "Telegram Stars, — пакет «Звездопад+», билеты в розыгрыш и подписка на канал."},
+        {"title": "2. Покупки в Telegram Stars",
+         "body": "Все покупки совершаются через официальный платёж Telegram Stars. "
+                 "Транзакции необратимы: возврат Stars через Telegram не предусмотрен, "
+                 "за исключением случаев, предусмотренных самим Telegram. "
+                 "Цены и состав пакетов указаны в игре и могут изменяться. "
+                 "Покупая пакет, вы подтверждаете, что ознакомились с этими условиями."},
+        {"title": "3. Пул осколков «Звездопад+»",
+         "body": "Покупка пакета «Звездопад+» — это взнос в общий пул осколков. "
+                 "80% вклада распределяется между активными игроками пропорционально их активности "
+                 "с сохранением случайности: 20% взноса остаётся проекту. "
+                 "Игрок, купивший пакет, может получить из пула не более 166% от своего взноса "
+                 "(потратив 300 Stars, можно получить до 500 Stars осколками); "
+                 "излишек возвращается в пул и достаётся другим игрокам. "
+                 "Осколки выпадают случайно, их количество не гарантировано."},
+        {"title": "4. Обмен осколков на подарки",
+         "body": "Обмен доступен с 1-го по 7-е число месяца, не чаще одного подарка в сутки на аккаунт. "
+                 "Подарок отправляется ботом в Telegram; получатель не может обменять его на Stars. "
+                 "Цена в осколках включает запас на изменение стоимости подарка."},
+        {"title": "5. Конкурсы и розыгрыши",
+         "body": "Условия участия в конкурсах, сроки, правила определения победителей и порядок "
+                 "вручения призов публикуются в канале @podtekst_game перед началом каждого конкурса. "
+                 "Организатор вправе отклонить участие при подозрении на накрутку, "
+                 "мультиаккаунты или автоматизированное нажатие."},
+        {"title": "6. Персональные данные",
+         "body": "Игра обрабатывает только Telegram ID, имя пользователя и игровую статистику, "
+                 "которые Telegram передаёт при запуске Mini App. Данные не продаются и не "
+                 "передаются третьим лицам, кроме сервисов, необходимых для работы игры."},
+        {"title": "7. Ответственность и прекращение доступа",
+         "body": "Организатор может изменить правила, приостановить или прекратить работу игры, "
+                 "ужесточить антифарм-фильтры и ограничить нетипичную активность. "
+                 "Решение организатора по спорным ситуациям является окончательным."},
+    ],
+}
+
+
+async def api_terms(request):
+    """Условия использования и приём согласия (галочка)."""
+    if request.method == "GET":
+        return web.json_response({"ok": True, "terms": TERMS_TEXT,
+                                  "version": TERMS_VERSION})
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "bad json"}, status=400)
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    if body.get("accept"):
+        acc["terms_version"] = TERMS_VERSION
+        acc["terms_at"] = int(time.time())
+        save_store(d)
+    return web.json_response({"ok": True, "accepted": acc.get("terms_version") == TERMS_VERSION,
+                              "version": acc.get("terms_version", "")})
+
+
+def terms_accepted(acc):
+    """Принял ли игрок актуальную версию условий."""
+    return acc.get("terms_version") == TERMS_VERSION
+
+
 async def api_wallet(request):
     try:
         body = await request.json()
@@ -1451,6 +1642,8 @@ async def api_action(request):
             acc["coins"] += 20
             acc["lives"] = min(9, acc["lives"] + 1)
             granted = True
+            # Активность засчитывается и в пул: ежедневный вход — событие.
+            pool_payout(acc, "daily")
         else:
             granted = False
     else:
@@ -1624,6 +1817,11 @@ async def api_answer(request):
             if _u:
                 drop_units = _u
                 logging.info("SHARD user=%s units=%s quiz", uid, _u)
+        # Выплата из общего пула: вклад бустеров перетекает к активным игрокам.
+        _pool_u = pool_payout(acc, "quiz")
+        if _pool_u:
+            drop_units += _pool_u
+            logging.info("POOL payout user=%s units=%s quiz", uid, _pool_u)
         if not chal.get("done"):
             chal["done"] = 1
             acc["coins"] += 30
@@ -1780,6 +1978,10 @@ async def api_m3(request):
             if _u:
                 m3_drop = _u
                 logging.info("SHARD user=%s units=%s m3", uid, _u)
+            _pool_u = pool_payout(acc, "m3")
+            if _pool_u:
+                m3_drop += _pool_u
+                logging.info("POOL payout user=%s units=%s m3", uid, _pool_u)
             m["lvl"] = cur + 1
             m["score"] = 0
             m["moves"] = M3_MAX_MOVES
@@ -4129,6 +4331,8 @@ def build_app(include_webhook=False):
     if include_webhook:
         app.router.add_post("/tg/{token}", webhook_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    app.router.add_get("/api/terms", api_terms)
+    app.router.add_post("/api/terms", api_terms)
     app.router.add_post("/api/wallet", api_wallet)
     app.router.add_post("/api/stars", api_stars)
     app.router.add_post("/api/stars/gift", api_gift_buy)
