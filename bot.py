@@ -80,6 +80,11 @@ def html_escape(s: str) -> str:
 
 CHAT_ID    = os.environ.get("CHANNEL_CHAT_ID", "-1004469511755")
 
+# Сервер считает дни по Москве (UTC+3). Объявлено здесь, а не рядом с
+# блоком ежедневных наград: модуль звёзд ниже использует его в аргументах
+# по умолчанию, и Python вычисляет их в момент определения функции.
+DAY_TZ_OFFSET = 3
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logging.getLogger("aiogram").setLevel(logging.WARNING)
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -1001,7 +1006,6 @@ DAY_REWARD = 20          # монет за простое заличие в иг
 DAY_BONUS_EVERY = 3     # каждые 3 дня — бонус
 DAY_BONUS = 60
 DAY_STREAK_BONUS = 150  # бонус на 7-й день серии
-DAY_TZ_OFFSET = 3       # сервер считает дни по Москве (UTC+3)
 
 def today_key(offset_h=DAY_TZ_OFFSET):
     """Ключ дня YYYY-MM-DD по московскому времени."""
