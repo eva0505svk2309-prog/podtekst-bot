@@ -413,9 +413,17 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="starChance" style="font-size:13px;color:#9fb6d4"></div>
  </div>
  <div class="card" style="margin-bottom:10px">
+  <div style="font-weight:800;margin-bottom:6px">⭐ ПОДТЕКСТ+ — подписка</div>
+  <div id="subBadge" class="small" style="margin-bottom:8px"></div>
+  <div id="subTiers" style="display:flex;flex-direction:column;gap:7px"></div>
+  <div class="small" style="margin-top:8px;opacity:.75">Подписка продлевается каждые 30 дней. Осколки капают раз в сутки, пока подписка активна. Отменить можно в любой момент в настройках Telegram.</div>
+ </div>
+ <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">🎁 Витрина подарков</div>
   <div id="starGiftNote" class="small" style="margin-bottom:8px"></div>
   <div id="starGifts" style="display:flex;flex-direction:column;gap:7px"></div>
+  <button id="liqToggle" style="width:100%;margin-top:9px">💱 Как превратить осколки в деньги</button>
+  <div id="liqBox" style="display:none;margin-top:9px"></div>
  </div>
  <div class="card" style="margin-bottom:10px">
   <div style="font-weight:800;margin-bottom:8px">🌠 Звездопад</div>
@@ -1333,6 +1341,79 @@ async function loadStars(){
  });
 }
 
+/* ---------- SUBSCRIPTION: ПОДТЕКСТ+ ---------- */
+var SUB_ST=null;
+function renderSub(){
+ var b=$("subBadge"), box=$("subTiers");
+ if(!b||!box)return;
+ box.innerHTML="";
+ if(!SUB_ST){b.textContent="Загрузка…";return;}
+ var st=SUB_ST.sub||{};
+ if(st.active){
+  b.innerHTML="✅ Подписка активна ещё <b style='color:#ffd76a'>"+st.days_left+"</b> дн.";
+ }else{
+  b.textContent="Одна подписка вместо разовых покупок: осколки капают каждый день.";
+ }
+ (SUB_ST.tiers||[]).forEach(function(t){
+  var d=document.createElement("div");
+  d.style.cssText="display:flex;align-items:center;gap:9px;background:#141b33;"+
+   "border:1px solid #3a4a7a;border-radius:12px;padding:9px";
+  var l=document.createElement("div");
+  l.style.cssText="flex:1;font-size:13px;line-height:1.4";
+  l.innerHTML="<b style='color:#ffd76a'>"+t.name+"</b> — "+t.stars+" ⭐/мес"+(t.usd?" (~$"+t.usd+")":"")+
+   "<br><span style='color:#9fb6d4;font-size:12px'>"+t.desc+"</span>";
+  var bt=document.createElement("button");
+  bt.className="pri";bt.textContent="Подписаться";
+  bt.onclick=async function(){
+   bt.disabled=true;bt.textContent="Отправляю…";
+   var j=await api2("/api/sub/buy",{tier:t.id});
+   bt.disabled=false;bt.textContent="Подписаться";
+   if(j&&j.ok){toast("Оплата отправлена — подтверди в Telegram");}
+   else if(j&&j.error==="terms not accepted"){
+    toast("Сначала прими условия");
+    document.querySelector('.tabs button[data-v=terms]').click();
+   }else{toast("Не получилось оформить подписку");}
+  };
+  d.appendChild(l);d.appendChild(bt);box.appendChild(d);
+ });
+}
+
+async function loadSub(){
+ var j=await api2("/api/sub",{});
+ if(!j||!j.ok)return;
+ SUB_ST=j;
+ renderSub();
+}
+
+/* ---------- LIQUIDITY: во что превращаются осколки ---------- */
+async function loadLiq(){
+ var box=$("liqBox");if(!box)return;
+ box.style.display="block";
+ if(box.innerHTML)return;
+ box.innerHTML="<div class='small'>Считаю…</div>";
+ var j=await api2("/api/gifts/liquidity",{});
+ if(!j||!j.ok){box.innerHTML="<div class='small'>Не удалось загрузить. Обнови экран.</div>";return;}
+ var m=j.market||{};
+ var h="<div class='small' style='margin-bottom:8px;line-height:1.5'>"+
+  "Осколки выходят из игры тремя путями. Гарантированный — конвертация подарка в Stars (Telegram удерживает 15%). "+
+  "Коллекционные подарки продаются за GRAM на маркетплейсе — цена плавает.";
+ if(m&&m.date){h+="<br><span style='opacity:.7'>Срез рынка GRAM: "+m.date+" · медиана "+m.median_gram+" GRAM · диапазон "+m.min_gram+"–"+m.max_gram+" GRAM</span>";}
+ h+="</div>";
+ (j.liquidity||[]).forEach(function(r){
+  h+="<div style='display:flex;gap:8px;align-items:center;background:#141b33;border:1px solid #2b3f5c;border-radius:10px;padding:8px;margin-bottom:6px;font-size:13px'>"+
+   "<span style='font-size:18px'>"+r.emoji+"</span>"+
+   "<span style='flex:1'>"+r.name+"<br><span style='font-size:11px;color:#9fb6d4'>"+
+   "цена "+r.price_units+" ✨ ("+r.price_shards+" ⭐) · конвертация "+r.convert_stars+" ⭐</span></span>"+
+   "<span style='font-size:11px;color:#9fb6d4;text-align:right'>"+r.exit+"</span></div>";
+ });
+ box.innerHTML=h;
+}
+document.getElementById("liqToggle").onclick=function(){
+ var b=$("liqBox");
+ if(b.style.display==="none"){this.textContent="💱 Скрыть расчёт";loadLiq();}
+ else{this.textContent="💱 Как превратить осколки в деньги";b.style.display="none";}
+};
+
 document.getElementById("petStageUpBtn").onclick=async function(){
  var b=this; b.disabled=true; b.textContent="Прокачиваю…";
  var j=await api2("/api/pet",{action:"upgrade"});
@@ -1454,7 +1535,7 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
  if(b.dataset.v==='m3' && (!grid || !grid.length)){ try{ startLevel(); }catch(e){} }
  if(b.dataset.v==='profile'){ m3Api("profile").then(()=>renderProfile()); registerVisit(); try{initReferral();}catch(e){} try{initContest();}catch(e){} loadBP(); try{loadLeaderboard();}catch(e){} }
  if(b.dataset.v==='cards'){ loadCards(); loadTourney(); }
- if(b.dataset.v==='stars'){ loadStars(); try{loadFreeze();}catch(e){} }
+ if(b.dataset.v==='stars'){ loadStars(); try{loadSub();}catch(e){} try{loadFreeze();}catch(e){} }
  if(b.dataset.v==='terms'){ loadTerms(); }
 });
 
