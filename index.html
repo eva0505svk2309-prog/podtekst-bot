@@ -1643,15 +1643,25 @@ const TYPES=['🎁','🧊','🍬','❄️','🔔','🕯️'];            /* 6 ne
 const SPECIAL={BOMB:6,RAINBOW:7,CANDLE:8,FROST:9};
 const BLOCKER=10;                 /* 🧱 тупиковая фигурка: снимается только сбором рядом */
 const M3_LEVELS=[
- {t:4,shape:"full",blk:0,moves:20},
- {t:4,shape:"full",blk:0,moves:20},
- {t:4,shape:"full",blk:0,moves:22},
- {t:5,shape:"full",blk:0,moves:22},
- {t:5,shape:"full",blk:4,moves:24},
- {t:5,shape:"diamond",blk:0,moves:24},
- {t:6,shape:"full",blk:6,moves:26},
- {t:6,shape:"corner",blk:5,moves:26}
+ {t:4,shape:"full",blk:0,moves:20,need:{}},
+ {t:4,shape:"full",blk:0,moves:20,need:{lamps:3}},
+ {t:4,shape:"full",blk:0,moves:22,need:{lamps:5}},
+ {t:5,shape:"full",blk:0,moves:22,need:{type:12,lamps:5}},
+ {t:5,shape:"full",blk:4,moves:24,need:{blocks:4}},
+ {t:5,shape:"diamond",blk:0,moves:24,need:{type:15}},
+ {t:6,shape:"full",blk:6,moves:26,need:{blocks:6,lamps:6}},
+ {t:6,shape:"corner",blk:5,moves:26,need:{blocks:5,type:18,lamps:8}}
 ];
+let needProg={type:{},blocks:0,lamps:0};
+function needReset(){needProg={type:{},blocks:0,lamps:0};}
+function needTypeBest(){var b=0;for(var k in needProg.type){if(needProg.type[k]>b)b=needProg.type[k];}return b;}
+function needSatisfied(){
+ var nd=(curCfg&&curCfg.need)||{};
+ if(nd.lamps&&needProg.lamps<nd.lamps)return false;
+ if(nd.blocks&&needProg.blocks<nd.blocks)return false;
+ if(nd.type&&needTypeBest()<nd.type)return false;
+ return true;
+}
 let curCfg=null,curCols=null,blkLeft=0;
 function ensureCfg(lv){curCfg=lvlCfg(lv||1);curCols=shapeCols(curCfg.shape);return curCfg}
 function lvlCfg(lv){var i=Math.max(0,Math.min(M3_LEVELS.length-1,(Number(lv)||1)-1));return M3_LEVELS[i]}
@@ -1900,15 +1910,19 @@ async function resolve(){let chain=0;
   if(chain>=2){freezeFrame(120);punchIn(240);}
   let specialMade=null,firstCell=null;
   m.forEach(k=>{const p=k.split(",");const r=+p[0],c=+p[1]; try{sparkBurst(Array.from(m));}catch(e){}
+   var tv=grid[r][c];
+   if(tv>=0&&tv<TYPES.length){needProg.type[tv]=(needProg.type[tv]||0)+1;}
    grid[r][c]=-1;
    [[1,0],[-1,0],[0,1],[0,-1]].forEach(function(d){var nr=r+d[0],nc=c+d[1];
     if(nr<0||nr>=N||nc<0||nc>=N)return;
     if(grid[nr][nc]===BLOCKER){grid[nr][nc]=-1;blkLeft=Math.max(0,blkLeft-1);
+     needProg.blocks=(needProg.blocks||0)+1;
      try{burst(nr,nc,"#8d6e63",16)}catch(e){}}});
    if(!firstCell)firstCell={r,c};
    burst(r,c,chain>1?"#f5c542":"#e03131",chain>2?18:10);
    /* light one garland lamp per match step */
-   if(lampState.length)lightLamp((chain-1)%GARLAND_MAX);
+   if(lampState.length){lightLamp((chain-1)%GARLAND_MAX);
+    needProg.lamps=(needProg.lamps||0)+1;}
    if(!specialMade&&m.size>=4&&rng()<0.5)specialMade={r,c};
    if(!specialMade&&chain>=3&&rng()<0.2)specialMade={r,c}});
   if(m.size>=5){flash();snowBurst();}
@@ -1932,10 +1946,15 @@ function gravity(){var tc=lvlTypeCount(m3.lvl||1);
   for(var j=w;j>=0;j--){var r2=rows[j];grid[r2][c]=rnd(tc)}}}
 
 function upd(){document.getElementById("moves").textContent=moves;
- document.getElementById("goalTxt").textContent="цель: "+goal+(blkLeft?" · 🧱 "+blkLeft:"");
+ var nd=(curCfg&&curCfg.need)||{},needTxt="";
+ if(nd.type)needTxt+=" · 🎁 "+needTypeBest()+"/"+nd.type;
+ if(nd.blocks)needTxt+=" · 🧱 "+needProg.blocks+"/"+nd.blocks;
+ if(nd.lamps)needTxt+=" · 💡 "+needProg.lamps+"/"+nd.lamps;
+ document.getElementById("goalTxt").textContent="цель: "+goal+(blkLeft?" · 🧱 "+blkLeft:"")+needTxt;
  const sc=document.getElementById("score");if(sc)sc.textContent=score;
  document.getElementById("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
 function levelSetup(){score=0;curCfg=lvlCfg(m3.lvl||1);curCols=shapeCols(curCfg.shape);
+ needReset();
  goal=m3Goal(m3.lvl||1);moves=curCfg.moves||M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
  var cb0=$("mContinue"); if(cb0) cb0.style.display="none";
  rng=Math.random;grid=makeBoard();comboUI(0);resetGarland();upd();render();
@@ -2075,7 +2094,12 @@ async function flushSave(){
  if(!pendingSave)return;pendingSave=false;
  const j=await m3Api("save",{level:m3.lvl,score:score,moves:moves,
   garland:(m3.garland||0),lamps:garlandLit(),
-  combo:curCombo,maxcombo:curMaxCombo,plays:m3.plays||0});
+  combo:curCombo,maxcombo:curMaxCombo,plays:m3.plays||0,
+  need:{type:needProg.type||{},blocks:needProg.blocks||0,lamps:needProg.lamps||0}});
+ if(j&&j.need_left&&j.need_left.length){
+  banner("Ещё нужно: "+j.need_left.join(" · "));
+  try{tg.HapticFeedback.notificationOccurred("warning");}catch(e){}
+ }
  if(j&&j.levelup){
   banner("УРОВЕНЬ "+m3.lvl+" 🎉");
   try{tg.HapticFeedback.notificationOccurred("success");}catch(e){}
