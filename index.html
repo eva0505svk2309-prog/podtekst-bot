@@ -2169,7 +2169,7 @@ var MIRA_REF_URL="https://t.me/mira?start=ref_8684637509";
 async function loadReferral(){
  var j=await api2("/api/referral",{});
  if(!j||!j.ok)return;
- var box=$("refLink"); if(box){ var lk=j.link||("https://t.me/"+BOT+"?start=ref"+String(ME_UID||"")); box.value=lk; SHARE_URL=lk; }
+ var box=$("refLink"); if(box){ var lk=j.link||("https://t.me/"+BOT+(ME_UID?("?start=ref"+String(ME_UID)):"")); box.value=lk; SHARE_URL=lk; }
  var st=$("refStat"); if(st) st.textContent="Приглашено: "+(j.invited||0)+" · до бонуса +100 🪙 осталось "+(j.left||3);
  /* Купон: 100 монет за 80 ⭐ вместо 100. Подставляется автоматически. */
  var cp=$("refCoupon"); if(cp){
@@ -2335,7 +2335,7 @@ function shareResult(){
   var uid=(window.S&&S.uid)||(typeof me!=="undefined"&&me&&me.uid)||null;
   var uid2=uid||ME_UID||"";
   var link = SHARE_URL || ("https://t.me/"+BOT+"?start=ref"+uid2);
-  if(!uid2){ link="https://t.me/"+BOT+"?start=ref"; }
+  if(!uid2){ link="https://t.me/"+BOT; }
   var text="Я набрал "+score+" подряд в ПОДТЕКСТЕ — угадываю скрытый смысл в обычных фразах. Сыграй так же: "+link;
   // 1) Нативный диалог Telegram
   try{
@@ -2367,7 +2367,7 @@ $("pRefresh").onclick=async function(){await m3Api("profile");renderProfile();to
 $("pShare").onclick=function(){
   var uid=(window.S&&S.uid)||null;
   var uid3=String(uid||ME_UID||"");
-  var link="https://t.me/"+BOT+"?start=ref"+uid3;
+  var link=uid3?("https://t.me/"+BOT+"?start=ref"+uid3):("https://t.me/"+BOT);
   var txt="🎄 Я в ПОДТЕКСТЕ: уровень "+m3.lvl+" · рекорд "+m3.best+" очков · гирлянд "+m3.garland
     +" · достижений "+achGot.length+"/"+ACH_LIST.length+". Сыграй и обгони: "+link;
   try{
