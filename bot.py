@@ -2129,6 +2129,14 @@ QUIZ_BANK = [{"q": "Он написал «ок» в 23:41. Это значит�
 # иначе NameError при импорте и деплой падает.
 QUIZ_BANK = QUIZ_BANK + NY_QUESTIONS
 
+# Смещение новогоднего банка фиксируем ЗДЕСЬ, а не вычисляем от len(QUIZ_BANK)
+# позже: дальше банк дополняется пакетами (quiz_pack), и вычисление
+# «len(QUIZ_BANK) - len(NY_QUESTIONS)» указывало уже не на новогодние
+# вопросы, а на хвост банка. Из-за этого в ноябре «челлендж дня» стабильно
+# выпадал на новогоднюю тематику.
+NY_OFFSET = len(QUIZ_BANK) - len(NY_QUESTIONS)
+NY_END = len(QUIZ_BANK)
+
 # Расширенные пули лежат отдельным модулем: bot.py и так уже большой,
 # а контент удобно править не трогая логику.
 try:
@@ -2146,10 +2154,39 @@ _daily_state = {}
 def ny_offset():
     """Индекс, с которого новогодние вопросы лежат в общем QUIZ_BANK.
 
-    Новогодние вопросы добавлены в конец банка, поэтому их индексы в
-    QUIZ_BANK глобальные — ответы в /api/answer остаются валидными.
+    Новогодние вопросы добавлены в конец базового банка, поэтому их индексы
+    в QUIZ_BANK глобальные — ответы в /api/answer остаются валидными.
+    Значение фиксировано при сборке банка (NY_OFFSET): банк потом растёт
+    за счёт quiz_pack, и пересчёт по len() давал бы неверную точку.
     """
-    return len(QUIZ_BANK) - len(NY_QUESTIONS)
+    return NY_OFFSET
+
+
+def ny_season():
+    """Новогодняя тематика включается только в декабре и январе.
+
+    В остальные месяцы новогодние вопросы не показываем: игрок в ноябре
+    не должен получать вопросы про ёлку и полночь.
+    """
+    try:
+        import datetime
+        return datetime.date.today().month in (12, 1)
+    except Exception:
+        return False
+
+
+def _pool_indices(season=None):
+    """Индексы вопросов, которые сейчас уместно показывать.
+
+    Вне сезона новогодние вопросы исключены полностью.
+    """
+    if season is None:
+        season = ny_season()
+    total = len(QUIZ_BANK)
+    if season:
+        return list(range(total))
+    return [i for i in range(total)
+            if not (NY_OFFSET <= i < NY_END)]
 
 
 def daily_pick(uid):
@@ -2174,11 +2211,13 @@ def daily_pick(uid):
             mm = int(d[5:7])
         except Exception:
             mm = 0
-        off = ny_offset()
         if mm in (12, 1) and NY_QUESTIONS:
-            idx = off + (h % len(NY_QUESTIONS))
+            idx = ny_offset() + (h % len(NY_QUESTIONS))
         else:
-            idx = h % (off if off else len(QUIZ_BANK))
+            # Вне сезона берём из общего пула БЕЗ новогодних вопросов,
+            # иначе «челлендж дня» в ноябре был бы про ёлку.
+            pool = _pool_indices(season=False)
+            idx = pool[h % len(pool)] if pool else (h % len(QUIZ_BANK))
         _daily_state[key] = idx
     return _daily_state[key]
 
@@ -2200,11 +2239,12 @@ def pick_fresh_question(acc):
     st = acc.setdefault("quiz", {})
     hist = [int(x) for x in (st.get("hist") or [])][-QUIZ_RECENT_KEPT:]
     block = set(hist[-QUIZ_BLOCK_RECENT:])
-    pool = [i for i in range(total) if i not in block]
+    allowed = _pool_indices()
+    pool = [i for i in allowed if i not in block]
     if not pool:
-        pool = [i for i in range(total) if i != (hist[-1] if hist else -1)]
+        pool = [i for i in allowed if i != (hist[-1] if hist else -1)]
     if not pool:
-        pool = list(range(total))
+        pool = allowed or list(range(total))
     idx = random.choice(pool)
     st["hist"] = (hist + [idx])[-QUIZ_RECENT_KEPT:]
     st["seen"] = int(st.get("seen", 0)) + 1
@@ -2240,6 +2280,32 @@ async def api_quiz(request):
     return web.json_response({"id": idx, "q": q["q"], "o": q["o"],
                               "daily": daily, "daily_done": int(chal.get("done", 0)),
                               "daily_streak": chal["streak"]})
+
+async def api_quiz_public(request):
+    """Вопрос для игры вне Telegram (обычный браузер, ссылка).
+
+    Без init_data сервер не может проверить ответ и начислить награду,
+    поэтому здесь отдаём вопрос вместе с правильным вариантом, а очки
+    считаются на клиенте. Банк — общий и свежий, без новогодних вопросов
+    вне сезона, поэтому вопросы не повторяются и не выпадают по кругу.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    pool = _pool_indices()
+    if not pool:
+        pool = list(range(len(QUIZ_BANK)))
+    try:
+        last = int((body or {}).get("last", -1))
+    except Exception:
+        last = -1
+    cand = [i for i in pool if i != last] or pool
+    idx = random.choice(cand)
+    q = QUIZ_BANK[idx]
+    return web.json_response({"ok": True, "id": idx, "q": q["q"], "o": q["o"],
+                              "c": q["c"], "h": q["h"], "last": last})
+
 
 async def api_answer(request):
     """Проверка ответа и начисление очков — только на сервере."""
@@ -4995,6 +5061,7 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/stars/boost", api_fall_boost)
     app.router.add_post("/api/action", api_action)
     app.router.add_post("/api/quiz", api_quiz)
+    app.router.add_post("/api/quiz/public", api_quiz_public)
     app.router.add_post("/api/answer", api_answer)
     app.router.add_post("/api/admin/credit", api_admin_credit)
     app.router.add_post("/api/m3", api_m3)
