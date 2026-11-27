@@ -13,7 +13,7 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "podtekst_game_bot")
 
 # Принудительное обновление Mini App: меняем версию при каждом деплое,
 # иначе Telegram WebView отдаёт закэшированную старую страницу.
-BUILD = os.environ.get("BUILD_ID", "6")
+BUILD = "shards-2.5-wins-v1"   # метка сборки: /api/build отдаёт её, чтоб видеть версию на проде
 if "?" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}?v={BUILD}"
 elif "v=" not in WEBAPP_URL:
@@ -64,7 +64,9 @@ AD_CAMPAIGNS = [
 ]
 AD_DEFAULT_IMG = "house-ad.jpg"
 AD_CLICK_BONUS = 25      # 🪙 игроку за просмотр рекламы (это же rewarded-слот)
-AD_VIEW_SHARDS = 3       # +0.3 звезды осколками за просмотр рекламы
+AD_VIEW_SHARDS = 3       # +0.3 звезды осколками за просмотр рекламы (в окне).
+                      # 3 units стоят $0.0017, средний rewarded-показ приносит
+                      # $0.0051 -> плюс $0.0034 на показ (анализ 27.11)
 AD_MIRA_SHARDS = 10      # +1 звезда осколками за клик именно по Mira
 AD_CLICK_SHARDS = 3      # +0.3 звезды осколками за клик по любой рекламе
 MISS_PENALTY_PCT = 10      # % от монет за пропуск дня (фишка Major)
@@ -197,6 +199,80 @@ FALL_TO_HOUR = 23               # воскресенье, 23:59
 FALL_BOOST_MULT = 2             # множитель шанса в окне
 FALL_BASE_CHANCE = 0.35         # базовый шанс выпадения осколка за событие
 
+# ---------- ЭКОНОМИКА ОСКОЛКОВ (перебаланс 27.11) ----------
+# Пока платежей нет, проект не может раздавать осколки каждому: в Хамстере
+# до первого аирдропа игроки годами копили копейки. Поэтому осколки — это
+# привилегия, а не зарплата: бесплатному минимум, платящему больше.
+# Окно дропа: пятница 18:00 -> понедельник 08:00 МСК. В пн-чт осколков нет.
+# ---------- РАСПИСАНИЕ ЗВЁЗДНЫХ ОКОН (27.11, ТЗ Елены) ----------
+# Задача — удержание аудитории: осколки должны падать КАЖДЫЙ ДЕНЬ, но в
+# конкретные часы, чтобы люди знали, когда заходить. Пн-чт — один час
+# вечером, пт — два часа, сб-вс — три «повышенных» окна.
+# Время московское (tm_hour по МСК).
+SHARD_WINDOWS = {
+    0: [(18, 19)],                 # пн
+    1: [(18, 19)],                 # вт
+    2: [(18, 19)],                 # ср
+    3: [(18, 19)],                 # чт
+    4: [(18, 20)],                 # пт
+    5: [(10, 11), (14, 15), (20, 22)],   # сб
+    6: [(10, 11), (14, 15), (20, 22)],   # вс
+}
+SHARD_WINDOW_TZ = DAY_TZ_OFFSET
+
+def shard_windows_for(wd):
+    """Окна дропа на день недели (0=пн)."""
+    return SHARD_WINDOWS.get(int(wd), SHARD_WINDOWS[0])
+
+def shard_window_now(now_ts=None):
+    """Окно открыто прямо сейчас? Возвращает (open, человеческий текст)."""
+    now_ts = now_ts or _now()
+    tm = time.gmtime(now_ts + SHARD_WINDOW_TZ * 3600)
+    wd, hh = tm.tm_wday, tm.tm_hour
+    for a, b in shard_windows_for(wd):
+        if a <= hh < b:
+            return True, "окно открыто до %02d:00" % b
+    return False, ""
+
+def shard_windows_text(now_ts=None):
+    """Расписание на сегодня — показываем игроку, чтобы он знал, когда ждать."""
+    now_ts = now_ts or _now()
+    tm = time.gmtime(now_ts + SHARD_WINDOW_TZ * 3600)
+    wins = shard_windows_for(tm.tm_wday)
+    names = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+    return ", ".join("%02d:00–%02d:00" % (a, b) for a, b in wins)
+
+def shard_next_window_text(now_ts=None):
+    """Когда следующее окно: сегодня или завтра."""
+    now_ts = now_ts or _now()
+    tm = time.gmtime(now_ts + SHARD_WINDOW_TZ * 3600)
+    wd, hh = tm.tm_wday, tm.tm_hour
+    names = ["понедельник", "вторник", "среда", "четверг", "пятница",
+             "суббота", "воскресенье"]
+    for d in range(0, 8):
+        w = (wd + d) % 7
+        for a, b in shard_windows_for(w):
+            if d == 0 and hh >= a:
+                continue
+            if d == 0 and hh < a:
+                return "сегодня в %02d:00" % a
+            return "%s в %02d:00" % (names[w], a)
+    return "скоро"
+
+SHARD_TIERS = {
+    # ключ: (шанс в окне, шанс вне окна, доля от выплаты пула, дневной потолок)
+    # free не получает осколки из игровых событий ВООБЩЕ: его осколки —
+    # только за просмотр рекламы. Реклама — единственный источник, который
+    # не тратит деньги проекта, поэтому именно на нём держится бесплатный игрок.
+    # Платящий (бустер/пакеты) и премиум получают осколки из событий.
+    "free":    (0.0,  0.0,  0.05, 20),   # ничего не вложил: только реклама
+    "payer":   (0.20, 0.0,  1.00, 60),   # вложился в бустер/пакеты
+    "premium": (0.30, 0.0,  1.50, 100),  # активна подписка ПОДТЕКСТ+
+}
+SHARD_DAY_CAP_FREE = 12       # единиц (десятых звезды) в сутки
+SHARD_ROLL_EXP = 2.0          # было 1.6 -> куски стали меньше
+SHARD_MAX_UNITS = 4          # максимум 0.4 звезды за одно событие
+
 FALL_BOOST_PACK_TTL = 86400 * 3  # 3 дня
 
 # Окно обмена на подарки: раз в месяц, 1-е..7-е число.
@@ -234,7 +310,9 @@ GIFT_CATALOG = {
 # получает 0.85 номинала звёздами и выводит их через Fragment в GRAM.
 # Проект при этом в плюсе: осколки игрок оплачивает по ~$0.02 за звезду,
 # а подарок бот покупает на Stars, выведенных по $0.013.
-GIFT_MARGIN = 1.0
+GIFT_MARGIN = 2.5         # запас на просадку при обмене подарка (анализ 27.11):
+                          # при 2.5 один осколок стоит $0.00056, и rewarded-показ
+                          # (eCPM $5.15) окупает до 9 осколков вместо 3.6
 
 # Telegram конвертирует обычный подарок обратно в Stars с потерей 15%:
 # gift.convert_stars < gift.stars. Это потолок «гарантированного» выхода
@@ -406,10 +484,15 @@ def pool_payout(acc, reason="event"):
         return 0
     mult = random.uniform(POOL_RAND_LO, POOL_RAND_HI)
     activity = _pool_activity(acc)
+    # Бесплатный игрок получает от общего котла крохи: пока платежей нет,
+    # проект не может кормить всех. Тир задаёт долю от выплаты.
+    tier_mult = SHARD_TIERS.get(shard_tier(acc), SHARD_TIERS["free"])[2]
+    if tier_mult <= 0:
+        return 0
     total = 0
     act = int(p.get("active", 0))
     if act > 0:
-        s1 = int(act * POOL_EVENT_RATE * mult * activity)
+        s1 = int(act * POOL_EVENT_RATE * mult * activity * tier_mult)
         s1 = max(0, min(s1, act, allowed - total))
         if s1 > 0:
             p["active"] = act - s1
@@ -419,7 +502,7 @@ def pool_payout(acc, reason="event"):
     p.setdefault("earned", {})[uid] = int(p["earned"].get(uid, 0)) + total
     _pool_save(p)
     st["pool_earned"] = earned + total
-    shards_add(acc, total, "pool:" + reason)
+    shards_add(acc, total, "pool:" + reason, enforce_cap=False)
     return total
 
 def _now():
@@ -432,30 +515,13 @@ def star_weekday(offset_h=DAY_TZ_OFFSET):
 
 
 def fall_window_open(now_ts=None):
-    """Звездопад открыт ли сейчас (пятница 18:00 -> воскресенье 23:59 МСК)."""
-    now_ts = now_ts or _now()
-    tm = time.gmtime(now_ts + DAY_TZ_OFFSET * 3600)
-    wd = tm.tm_wday          # 0=пн
-    hh = tm.tm_hour
-    if wd == 4 and hh >= FALL_FROM_HOUR:      # пятница вечер
-        return True
-    if wd in (5, 6):                          # сб, вс — весь день
-        return True
-    if wd == 0 and hh < 8:                    # понедельник до 08:00 — хвост окна
-        return True
-    return False
+    """Открыто ли сейчас звёздное окно (по расписанию SHARD_WINDOWS)."""
+    return shard_window_now(now_ts)[0]
 
 
 def fall_next_open_text():
-    """Человеческая дата следующего окна Звездопада."""
-    tm = time.gmtime(_now() + DAY_TZ_OFFSET * 3600)
-    wd = tm.tm_wday
-    days = (4 - wd) % 7
-    if wd == 4 and tm.tm_hour >= FALL_FROM_HOUR:
-        days = 7
-    names = ["понедельник", "вторник", "среда", "четверг", "пятница",
-             "суббота", "воскресенье"]
-    return names[(4 + days) % 7]
+    """Человеческая дата следующего окна."""
+    return shard_next_window_text()
 
 
 _GRAM_MARKET = {"data": None, "ts": 0}
@@ -515,10 +581,54 @@ def shards_of(acc):
     return int((acc.get("star") or {}).get("shards", 0))
 
 
-def shards_add(acc, units, reason=""):
-    """Начислить осколки (в десятых). Возвращает фактически начисленное."""
+def shard_tier(acc):
+    """Тир игрока по осколкам: free / payer / premium."""
+    st = acc.get("star") or {}
+    if sub_state(acc).get("active"):
+        return "premium"
+    if int(st.get("contributed", 0)) > 0:
+        return "payer"
+    return "free"
+
+
+def shard_day_key():
+    """Ключ суток по МСК — для дневного потолка осколков."""
+    return time.strftime("%Y-%m-%d", time.gmtime(_now() + DAY_TZ_OFFSET * 3600))
+
+
+def shard_day_spent(acc):
     st = acc.setdefault("star", {})
-    st["shards"] = max(0, int(st.get("shards", 0)) + int(units))
+    day = shard_day_key()
+    if st.get("shard_day") != day:
+        st["shard_day"] = day
+        st["shard_day_units"] = 0
+    return int(st.get("shard_day_units", 0))
+
+
+def shard_day_add(acc, units):
+    st = acc.setdefault("star", {})
+    st["shard_day"] = shard_day_key()
+    st["shard_day_units"] = int(st.get("shard_day_units", 0)) + int(units)
+    return int(st["shard_day_units"])
+
+
+def shards_add(acc, units, reason="", enforce_cap=True):
+    """Начислить осколки (в десятых). Возвращает фактически начисленное.
+
+    enforce_cap=True — уважать дневной потолок тира. Выплаты из общего пула
+    идут с enforce_cap=False: это уже деньги, вложенные бустером, их не режем.
+    """
+    st = acc.setdefault("star", {})
+    units = int(units)
+    if enforce_cap and units > 0:
+        tier = shard_tier(acc)
+        cap = SHARD_TIERS.get(tier, SHARD_TIERS["free"])[3]
+        room = max(0, cap - shard_day_spent(acc))
+        units = min(units, room)
+    if units <= 0:
+        return 0
+    st["shards"] = max(0, int(st.get("shards", 0)) + units)
+    shard_day_add(acc, units)
     if reason:
         log = st.setdefault("log", [])
         log.append({"u": int(units), "r": reason, "t": _now()})
@@ -537,17 +647,28 @@ def shards_spend(acc, units):
 
 
 def _roll_shard_units():
-    """Осколок 0.1..1.0 звезды, смещённый к мелким."""
-    r = random.random() ** 1.6      # чаще мелкие куски
-    units = SHARD_MIN + int(r * (SHARD_MAX - SHARD_MIN + 1))
-    return max(SHARD_MIN, min(SHARD_MAX, units))
+    """Осколок 0.1..0.4 звезды, смещённый к мелким (перебаланс 27.11)."""
+    r = random.random() ** SHARD_ROLL_EXP   # чаще мелкие куски
+    units = SHARD_MIN + int(r * (SHARD_MAX_UNITS - SHARD_MIN + 1))
+    return max(SHARD_MIN, min(SHARD_MAX_UNITS, units))
 
 
 def star_chance_for(acc):
-    """Итоговый шанс выпадения осколка за событие."""
-    base = FALL_BASE_CHANCE
-    if fall_window_open():
-        base *= FALL_BOOST_MULT
+    """Итоговый шанс выпадения осколка за событие.
+
+    Перебаланс 27.11: осколки — привилегия, а не зарплата.
+      * вне окна (пн-чт) бесплатный игрок не получает ничего;
+      * в окне пт-вс шанс зависит от тира: free / payer / premium;
+      * дневной потолок: сколько бы ни играл, больше порога не накапает;
+      * антифарм: чем больше уже накоплено, тем ниже шанс.
+    """
+    tier = shard_tier(acc)
+    win_chance, out_chance, _pool_mult, day_cap = SHARD_TIERS.get(
+        tier, SHARD_TIERS["free"])
+    base = win_chance if fall_window_open() else out_chance
+    # Дневной потолок исчерпан — осколков больше не будет.
+    if shard_day_spent(acc) >= day_cap:
+        return 0.0
     # Антифарм: чем больше уже накоплено, тем ниже шанс.
     held = shards_of(acc)
     if held >= 60:
@@ -559,6 +680,14 @@ def star_chance_for(acc):
     if int(st.get("boost_until", 0)) > _now():
         base *= 1.8
     return max(0.0, min(0.95, base))
+
+
+def _drop_reason_text(reason):
+    """Человеческий текст причины выпадения осколка для всплывашки."""
+    r = (reason or "").strip()
+    if not r:
+        return ""
+    return r
 
 
 def try_drop_shard(acc, reason="event"):
@@ -580,6 +709,8 @@ def star_view(acc):
         "stars": round(units / STAR_PACK, 2),
         "fall_open": fall_window_open(),
         "fall_next": fall_next_open_text(),
+        "fall_today": shard_windows_text(),
+        "tier": shard_tier(acc),
         "gift_open": gift_window_open(),
         "gift_next": gift_window_next_text(),
         "boost_until": int(st.get("boost_until", 0)),
@@ -2443,6 +2574,7 @@ async def api_answer(request):
     chal["last"] = today
 
     drop_units = 0
+    drop_reason = ""
     if good:
         acc["coins"] += 10
         acc["streak"] += 1
@@ -2471,11 +2603,13 @@ async def api_answer(request):
             _u, _r = try_drop_shard(acc, "quiz")
             if _u:
                 drop_units = _u
+                drop_reason = "за серию правильных ответов"
                 logging.info("SHARD user=%s units=%s quiz", uid, _u)
         # Выплата из общего пула: вклад бустеров перетекает к активным игрокам.
         _pool_u = pool_payout(acc, "quiz")
         if _pool_u:
             drop_units += _pool_u
+            drop_reason = "из общего котла" if not drop_reason else drop_reason + " + из общего котла"
             logging.info("POOL payout user=%s units=%s quiz", uid, _pool_u)
         if not chal.get("done"):
             chal["done"] = 1
@@ -2500,6 +2634,7 @@ async def api_answer(request):
     save_store(d)
     return web.json_response({"ok": True, "correct": good, "answer": q["o"][q["c"]],
                               "hint": q["h"], "drop": int(drop_units),
+                              "drop_reason": _drop_reason_text(drop_reason),
                               **bp_state(acc), **wallet_view(acc)})
 
 
@@ -2507,7 +2642,7 @@ async def api_answer(request):
 # Счётчик уровня и очки считает СЕРВЕР: клиент присылает только факт игры,
 # а сервер сам решает, засчитать ли уровень и сколько монет дать.
 M3_BASE_GOAL = 260
-M3_GOAL_GROWTH = 1.30
+M3_GOAL_GROWTH = 1.08     # было 1.30 -> цели улетали в космос, уровни не проходились
 M3_MAX_MOVES = 20
 M3_GARLAND_MAX = 10
 
@@ -2524,6 +2659,12 @@ M3_LEVELS = [
     {"t": 5, "shape": "diamond", "blk": 0, "moves": 24, "need": {"type": 15}},
     {"t": 6, "shape": "full",    "blk": 6, "moves": 26, "need": {"blocks": 6, "lamps": 6}},
     {"t": 6, "shape": "corner",  "blk": 5, "moves": 26, "need": {"blocks": 5, "type": 18, "lamps": 8}},
+    {"t": 6, "shape": "full",    "blk": 0, "moves": 26, "need": {"type": 16}},
+    {"t": 6, "shape": "full",    "blk": 4, "moves": 26, "need": {"blocks": 4, "type": 14}},
+    {"t": 6, "shape": "diamond", "blk": 6, "moves": 28, "need": {"blocks": 6, "lamps": 6}},
+    {"t": 6, "shape": "corner",  "blk": 6, "moves": 28, "need": {"blocks": 6, "type": 18, "lamps": 8}},
+    {"t": 6, "shape": "full",    "blk": 8, "moves": 28, "need": {"blocks": 8, "lamps": 8}},
+    {"t": 6, "shape": "corner",  "blk": 8, "moves": 30, "need": {"blocks": 8, "type": 20, "lamps": 10}},
 ]
 
 def m3_level_cfg(level):
@@ -2601,6 +2742,7 @@ def unlock(acc, key):
 async def api_m3(request):
     """Сохранение прогресса match-3. Сервер проверяет всё, что можно проверить."""
     m3_drop = 0
+    m3_reason = ""
     try:
         body = await request.json()
     except Exception:
@@ -2705,10 +2847,12 @@ async def api_m3(request):
             _u, _r = try_drop_shard(acc, "m3")
             if _u:
                 m3_drop = _u
+                m3_reason = "за пройденный уровень"
                 logging.info("SHARD user=%s units=%s m3", uid, _u)
             _pool_u = pool_payout(acc, "m3")
             if _pool_u:
                 m3_drop += _pool_u
+                m3_reason = "из общего котла" if not m3_reason else m3_reason + " + из общего котла"
                 logging.info("POOL payout user=%s units=%s m3", uid, _pool_u)
             m["lvl"] = cur + 1
             m["score"] = 0
@@ -2722,6 +2866,7 @@ async def api_m3(request):
             return web.json_response({"ok": True, "levelup": True, "stars": stars,
                                       "need": nd,
                                       "reward": 30 + stars * 20, "drop": int(m3_drop),
+                                      "drop_reason": _drop_reason_text(m3_reason),
                                       **wallet_view(acc), **m3_view(acc)})
 
         if combo >= 5: unlock(acc, "combo5")
@@ -2732,6 +2877,7 @@ async def api_m3(request):
             m["best"] = score
         save_store(d)
         return web.json_response({"ok": True, "levelup": False, "drop": int(m3_drop),
+                              "drop_reason": _drop_reason_text(m3_reason),
                                   "need": nd, "need_left": need_left,
                                   **wallet_view(acc), **m3_view(acc)})
 
@@ -3005,14 +3151,18 @@ async def api_affiliate(request):
     save_store(d)
     # Настоящие affiliate-ссылки Telegram. Если их ещё нет — отдаём
     # start-ссылку бота, чтобы карточка не была пустой.
-    link = (AFF_LINKS.get("personal") or AFF_LINKS.get("channel") or
-            AFF_LINKS.get("miniapp") or
+    # Ссылки живут в store: их можно поменять командой /afflink без редеплоя.
+    stored = prog.get("links") or {}
+    links_all = {k: (stored.get(k) or AFF_LINKS.get(k) or "") for k in
+                 ("personal", "channel", "miniapp")}
+    link = (links_all.get("personal") or links_all.get("channel") or
+            links_all.get("miniapp") or
             "https://t.me/%s?startapp=ref_%s" % (BOT_USERNAME, MIRA_REF))
     # Куда платить комиссию и выводить звёзды — TON-кошелёк владельца.
     payout = TON_WALLET
     return web.json_response({
         "ok": True,
-        "links": {k: v for k, v in AFF_LINKS.items() if v},
+        "links": {k: v for k, v in links_all.items() if v},
         "commission_permille": prog["commission_permille"],
         "commission_percent": round(prog["commission_permille"] / 10, 1),
         "duration_months": prog["duration_months"],
@@ -3301,13 +3451,35 @@ async def api_ad_reward(request):
         return web.json_response({"ok": False, "error": "ad limit", **wallet_view(acc)})
     seen[today] = n + 1
     acc["coins"] += AD_CLICK_BONUS
-    # Осколки за просмотр: монеты живут недолго, осколки копятся
-    # и уводят игрока к витрине подарков - там наш настоящий доход.
-    shards_add(acc, AD_VIEW_SHARDS, "ad_view")
+    # Осколки за просмотр рекламы. Это ЕДИНСТВЕННЫЙ бесплатный источник
+    # осколков: реклама приносит деньги, поэтому осколки за неё
+    # не съедают маржу проекта. Покупатель бустера/пакетов смотрит рекламу
+    # по-прежнему (бустер не отменяет рекламу), но получает больше.
+    tier = shard_tier(acc)
+    ad_units = AD_VIEW_SHARDS
+    if tier == "payer":
+        ad_units = int(ad_units * 1.5)      # 4 units
+    elif tier == "premium":
+        ad_units = int(ad_units * 2.0)      # 6 units
+    # Осколки за рекламу капают ТОЛЬКО в звёздное окно. Так окно работает
+    # как повод вернуться: монеты игрок получит сразу, а за осколками
+    # придёт в выбранное время (пн-чт 18:00-19:00, пт 18:00-20:00,
+    # сб-вс 10:00-11:00, 14:00-15:00, 20:00-22:00).
+    win_open, win_txt = shard_window_now()
+    got = 0
+    if win_open:
+        got = shards_add(acc, ad_units, "ad_view")
+        if got < ad_units:
+            logging.info("SHARD ad capped user=%s want=%s got=%s", uid, ad_units, got)
+    else:
+        got = 0
     contest_add_points(d, acc, "ad", 5); bp_add_points(d, acc, "ad")
     save_store(d)
     return web.json_response({"ok": True, "reward": AD_CLICK_BONUS,
-                              "shards": AD_VIEW_SHARDS,
+                              "shards": got,
+                              "shards_window": bool(win_open),
+                              "shards_next": shard_next_window_text(),
+                              "shards_today": shard_windows_text(),
                               "left": 5 - n - 1, **wallet_view(acc)})
 
 async def api_channel_sub(request):
@@ -4269,6 +4441,55 @@ async def contest_cmd(message: types.Message):
         lines.append("\nСейчас доступна <b>первая ступень</b> — пройди её, чтобы открыть следующую.")
     lines.append("\nИграй тут:")
     await message.answer("\n".join(lines), reply_markup=kb())
+
+@dp.message(Command("afflink"))
+async def afflink_cmd(message: types.Message):
+    """Админ: прописать партнёрские ссылки Telegram.
+
+    /afflink personal <url> — ссылка на личный баланс звёзд
+    /afflink channel <url>  — ссылка на баланс канала
+    /afflink miniapp <url>  — ссылка на баланс мини-приложения
+    /afflink clear           — убрать все ссылки
+    """
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Нет доступа."); return
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("Формат: /afflink <personal|channel|miniapp> <url>"); return
+    d = load_store()
+    prog = d.setdefault("_affiliate", {})
+    links = prog.setdefault("links", {})
+    if parts[1].lower() == "clear":
+        prog["links"] = {}
+        save_store(d)
+        await message.answer("Партнёрские ссылки очищены.")
+        return
+    kind = parts[1].lower()
+    if kind not in ("personal", "channel", "miniapp"):
+        await message.answer("Тип должен быть personal, channel или miniapp."); return
+    if len(parts) < 3 or not parts[2].startswith("http"):
+        await message.answer("Нужна полная ссылка, начиная с http."); return
+    links[kind] = parts[2].strip()
+    save_store(d)
+    await message.answer(f"Сохранено ({kind}):\n{links[kind]}")
+
+
+@dp.message(Command("affinfo"))
+async def affinfo_cmd(message: types.Message):
+    """Админ: текущее состояние партнёрской программы."""
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("Нет доступа."); return
+    d = load_store()
+    prog = d.setdefault("_affiliate", {})
+    links = prog.get("links") or {}
+    lines = ["Партнёрская программа:",
+             f"Комиссия: {prog.get('commission_permille', AFF_COMMISSION_PERMILLE)/10}%",
+             f"Период: {prog.get('duration_months', AFF_DURATION_MONTHS)} мес.",
+             f"Кошелёк: {TON_WALLET or '— не задан'}"]
+    for k in ("personal", "channel", "miniapp"):
+        lines.append(f"{k}: {links.get(k) or AFF_LINKS.get(k) or '— пусто'}")
+    await message.answer("\n".join(lines))
+
 
 @dp.message(Command("giveprize"))
 async def giveprize(message: types.Message):
