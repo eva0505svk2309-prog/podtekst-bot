@@ -1542,22 +1542,32 @@ document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
 /* ---------- QUIZ (server-authoritative) ---------- */
 let qi=-1,qOpts=[],answered=false,timer=null,left=10,curQ=null;
 
+/* История показанных вопросов: последние не показываем снова.
+   Раньше в браузере (без Telegram) вопросы брались из крошечного
+   локального банка в 6 вопросов — они крутились по кругу и повторялись
+   через один. Теперь вопросы берутся с сервера, а история не даёт
+   повторить недавний вопрос. */
+var QHIST=[];
+function qhistPush(id){ QHIST.push(id); if(QHIST.length>40) QHIST.shift(); }
+
 async function loadQuestion(mode){
-  if(!INIT){ // без Telegram — локальный запасной вариант
-    const Q=[{q:"Он написал «ок» в 23:41. Это значит…",o:["Всё хорошо, спит","Что-то не так, но он не хочет говорить","Он в душе","Просто не заметил"],c:1,h:"23:41 — не время для «ок»."},
-             {q:"«Позвони, если что»",o:["Никогда не позвонит","Позвонит, если что случилось","Ждёт звонка прямо сейчас","Он занят"],c:1,h:"Фраза-отказ и фраза-приглашение одновременно."},
-             {q:"Не спрашивала — сам прислал фото с отпуска",o:["Ему скучно без тебя","Показать, что там красиво без тебя","Просто делится","Хвастается"],c:0,h:"Пишет первым = ты в мыслях."},
-             {q:"31 декабря, 23:50. Он пишет «ты где?»",o:["Случайно — праздник","Проверяет, будешь ли ты с ним","Ищет, кого позвать в полночь","Ему нечего делать"],c:1,h:"Новый год не отменяет подтексты."},
-             {q:"Голосовое в 00:03, 40 секунд, смех",o:["Веселился","Пил","Записывал приветствие","Хочет поговорить с тобой"],c:3,h:"Он выбрал звонок тебе."},
-             {q:"Фотка ёлки с подписью «одна без тебя»",o:["Просто фото","Намёк на тебя","Жалуется","Хвастается"],c:1,h:"«Одна» — ключевое слово."}];
-    const it=Q[Math.floor(Math.random()*Q.length)];
-    curQ=it;qi=-1;qOpts=it.o;renderQ();return;
+  if(!INIT){
+    // Без Telegram — берём вопрос с сервера (без init_data сервер
+    // отдаёт вопрос и правильный вариант, очки считаются на клиенте).
+    try{
+      const r=await fetch(API+"/api/quiz/public",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({last:QHIST.length?QHIST[QHIST.length-1]:-1})});
+      const j=await r.json();
+      if(j&&j.q){ curQ=j; qOpts=j.o; qi=j.id; qhistPush(j.id); renderQ(); return; }
+    }catch(e){}
+    toast("Не удалось загрузить вопрос");
+    return;
   }
   try{
     const r=await fetch(API+"/api/quiz",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({init_data:INIT,mode:mode||"random"})});
     const j=await r.json();
-    if(j&&j.q){curQ=j;qOpts=j.o;qi=j.id;renderQ();}
+    if(j&&j.q){curQ=j;qOpts=j.o;qi=j.id;qhistPush(j.id);renderQ();}
   }catch(e){toast("Не удалось загрузить вопрос");}
 }
 function renderQ(){
