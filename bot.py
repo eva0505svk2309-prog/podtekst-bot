@@ -36,8 +36,9 @@ AD_CAMPAIGNS = [
         "text": "Ещё одна игра про подтексты. Открыть и забрать бонус",
         "url": os.environ.get("AD_BUMS_URL", "https://t.me/bums/app?startapp=ref_8684637509"),
         "img": "ad-bums.jpg",
-        # Вес 0: у Bums 502 на api.bums.bot, ссылка мёртвая — не тратим клики.
-        "weight": 0,
+        # Вес 1: api.bums.bot отдаёт 502 (рекламный API упал), но ссылка
+        # t.me/bums/app жива — клик по креативу всё равно приводит игрока.
+        "weight": 1,
     },
     {
         "id": "notwise",
@@ -142,8 +143,15 @@ MIRA_ASK_COOLDOWN = 90          # секунд между вопросами о�
 # Партнёрская программа Telegram. Создать её может только аккаунт-владелец
 # (bots.updateStarRefProgram доступен лишь пользователям), поэтому бот
 # только хранит параметры и показывает владельцу, что настроить.
-AFF_COMMISSION_PERMILLE = 100   # 10%
+AFF_COMMISSION_PERMILLE = 200   # 20% — программа создана в профиле мини-приложения
 AFF_DURATION_MONTHS = 3
+# Реферальные ссылки Telegram выдаёт в «Мои звёзды». Сюда вписываются
+# ссылки, сгенерированные для балансов: личный / канал / мини-приложение.
+AFF_LINKS = {
+    "personal": os.environ.get("AFF_LINK_PERSONAL", ""),
+    "channel":  os.environ.get("AFF_LINK_CHANNEL", ""),
+    "miniapp":  os.environ.get("AFF_LINK_MINIAPP", ""),
+}
 # ID чата, где бот принимает промпты на генерацию. Задаётся переменной
 # окружения: создать группу может только аккаунт человека, бот — не может.
 GEN_CHAT_ID = os.environ.get("GEN_CHAT_ID", "").strip()
@@ -2495,21 +2503,24 @@ async def api_answer(request):
 # ---------------- Mini App API: прогресс match-3 + профиль ----------------
 # Счётчик уровня и очки считает СЕРВЕР: клиент присылает только факт игры,
 # а сервер сам решает, засчитать ли уровень и сколько монет дать.
-M3_BASE_GOAL = 400
-M3_GOAL_GROWTH = 1.32
+M3_BASE_GOAL = 260
+M3_GOAL_GROWTH = 1.30
 M3_MAX_MOVES = 20
 M3_GARLAND_MAX = 10
 
 M3_LEVELS = [
-    # t — сколько базовых фигур доступно, shape — форма поля, blk — тупиков, moves — ходы
-    {"t": 4, "shape": "full",    "blk": 0, "moves": 20},
-    {"t": 4, "shape": "full",    "blk": 0, "moves": 20},
-    {"t": 4, "shape": "full",    "blk": 0, "moves": 22},
-    {"t": 5, "shape": "full",    "blk": 0, "moves": 22},
-    {"t": 5, "shape": "full",    "blk": 4, "moves": 24},
-    {"t": 5, "shape": "diamond", "blk": 0, "moves": 24},
-    {"t": 6, "shape": "full",    "blk": 6, "moves": 26},
-    {"t": 6, "shape": "corner",  "blk": 5, "moves": 26},
+    # t — сколько базовых фигур, shape — форма поля, blk — тупиков, moves — ходы,
+    # need — что ещё обязательно нужно сделать, чтобы закрыть уровень:
+    #   type — собрать N фигурок этого типа, blocks — сломать N тупиков,
+    #   lamps — зажечь N ламп в гирлянде.
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 20, "need": {}},
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 20, "need": {"lamps": 3}},
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 22, "need": {"lamps": 5}},
+    {"t": 5, "shape": "full",    "blk": 0, "moves": 22, "need": {"type": 12, "lamps": 5}},
+    {"t": 5, "shape": "full",    "blk": 4, "moves": 24, "need": {"blocks": 4}},
+    {"t": 5, "shape": "diamond", "blk": 0, "moves": 24, "need": {"type": 15}},
+    {"t": 6, "shape": "full",    "blk": 6, "moves": 26, "need": {"blocks": 6, "lamps": 6}},
+    {"t": 6, "shape": "corner",  "blk": 5, "moves": 26, "need": {"blocks": 5, "type": 18, "lamps": 8}},
 ]
 
 def m3_level_cfg(level):
@@ -2530,6 +2541,11 @@ def level_hint(body, m):
     except Exception:
         v = int(m.get("lvl", 1))
     return max(1, v)
+
+def m3_need(level):
+    """Требования уровня: что нужно набрать сверх очков."""
+    return dict(m3_level_cfg(level).get("need") or {})
+
 
 def m3_goal(level):
     try:
@@ -2561,6 +2577,7 @@ def m3_view(acc):
                    "combo": m.get("combo", 0), "maxcombo": m.get("maxcombo", 0),
                    "total": m.get("total", 0), "cleared": m.get("cleared", 0)},
             "goal": m3_goal(lv),
+            "need": m3_need(lv),
             "cfg": {"t": m3_level_cfg(lv)["t"], "shape": m3_level_cfg(lv)["shape"],
                     "blk": m3_level_cfg(lv)["blk"], "moves": m3_max_moves(lv)},
             "ach": acc.get("ach", []),
@@ -2612,6 +2629,16 @@ async def api_m3(request):
         garland = num("garland", 0, 0, 10 ** 7)      # всего гирлянд за всё время
         lamps = num("lamps", 0, 0, M3_GARLAND_MAX)    # ламп в текущей гирлянде
         combo = num("combo", 0, 0, 99)
+        # Прогресс целей уровня: собрано фигурок (по типам), сломано тупиков, зажжено ламп
+        need = body.get("need") or {}
+        n_types = {}
+        try:
+            for k, v in (need.get("type") or {}).items():
+                n_types[str(k)[:2]] = max(0, min(9999, int(v)))
+        except Exception:
+            n_types = {}
+        n_blocks = num("need_blocks", 0, 0, 999)
+        n_lamps  = num("need_lamps", 0, 0, 999)
         maxcombo = num("maxcombo", 0, 0, 99)
         plays = num("plays", 0, 0, 10 ** 7)
 
@@ -2645,9 +2672,25 @@ async def api_m3(request):
         m["plays_last"] = int(plays)
         m["plays"] = max(int(m.get("plays", 0)), plays)
 
-        # Уровень засчитывается сервером: только если хватает очков.
+        # Уровень засчитывается сервером: хватает очков И выполнены цели уровня.
         goal = m3_goal(cur)
-        if score >= goal and cur == level:
+        nd = m3_need(cur)
+        need_ok = True
+        need_left = []
+        if nd.get("type"):
+            best = max(n_types.values()) if n_types else 0
+            if best < nd["type"]:
+                need_ok = False
+                need_left.append("собери %d одинаковых фигурок (сейчас %d)" % (nd["type"], best))
+        if nd.get("blocks"):
+            if n_blocks < nd["blocks"]:
+                need_ok = False
+                need_left.append("сломай %d тупиков (сейчас %d)" % (nd["blocks"], n_blocks))
+        if nd.get("lamps"):
+            if n_lamps < nd["lamps"]:
+                need_ok = False
+                need_left.append("зажги %d ламп (сейчас %d)" % (nd["lamps"], n_lamps))
+        if score >= goal and cur == level and need_ok:
             stars = 3 if moves >= 10 else (2 if moves >= 5 else 1)
             acc["coins"] += 30 + stars * 20
             m["cleared"] = int(m.get("cleared", 0)) + 1
@@ -2674,6 +2717,7 @@ async def api_m3(request):
             if int(m.get("garland", 0)) >= 10: unlock(acc, "all_lamps")
             save_store(d)
             return web.json_response({"ok": True, "levelup": True, "stars": stars,
+                                      "need": nd,
                                       "reward": 30 + stars * 20, "drop": int(m3_drop),
                                       **wallet_view(acc), **m3_view(acc)})
 
@@ -2685,6 +2729,7 @@ async def api_m3(request):
             m["best"] = score
         save_store(d)
         return web.json_response({"ok": True, "levelup": False, "drop": int(m3_drop),
+                                  "need": nd, "need_left": need_left,
                                   **wallet_view(acc), **m3_view(acc)})
 
     if action == "profile":
@@ -2953,11 +2998,16 @@ async def api_affiliate(request):
     prog = d.setdefault("_affiliate", {})
     prog.setdefault("commission_permille", AFF_COMMISSION_PERMILLE)
     prog.setdefault("duration_months", AFF_DURATION_MONTHS)
-    prog.setdefault("enabled", False)
+    prog.setdefault("enabled", True)
     save_store(d)
-    link = "https://t.me/%s?startapp=ref_%s" % (BOT_USERNAME, MIRA_REF)
+    # Настоящие affiliate-ссылки Telegram. Если их ещё нет — отдаём
+    # start-ссылку бота, чтобы карточка не была пустой.
+    link = (AFF_LINKS.get("personal") or AFF_LINKS.get("channel") or
+            AFF_LINKS.get("miniapp") or
+            "https://t.me/%s?startapp=ref_%s" % (BOT_USERNAME, MIRA_REF))
     return web.json_response({
         "ok": True,
+        "links": {k: v for k, v in AFF_LINKS.items() if v},
         "commission_permille": prog["commission_permille"],
         "commission_percent": round(prog["commission_permille"] / 10, 1),
         "duration_months": prog["duration_months"],
