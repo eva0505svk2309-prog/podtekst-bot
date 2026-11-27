@@ -1,5 +1,5 @@
 
-import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse, urllib.request, datetime
+import asyncio, os, logging, json, hmac, hashlib, time, random, urllib.parse, urllib.request, datetime, io
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -127,6 +127,26 @@ FREEZE_MAX = 3             # максимум заморозок в запаре
 FREEZE_FREE_EVERY = 7      # одна бесплатная заморозка раз в 7 дней
 FREEZE_COST_SHARDS = 100   # докупка за 100 осколков (1 звезда)
 FREEZE_COST_STARS = 50     # докупка за 50 Stars
+
+# Пакеты генераций картинок. Себестоимость генерации — 30..120 токенов Mira,
+# при PRO-цене это 15..60 звёзд за картинку. Продаём пакетом с запасом:
+# 10 генераций за 900 звёзд = 90 звёзд на картинку при себестоимости до 60.
+GEN_PACK_STARS = 900
+GEN_PACK_COUNT = 10
+GEN_PACK_BIG_STARS = 2400
+GEN_PACK_BIG_COUNT = 30
+# Текстовый вопрос Mira за осколки: 10 осколков = 1 звезда.
+# Это сток для осколков — они тратятся, а не просто копятся.
+MIRA_ASK_SHARDS = 10
+MIRA_ASK_COOLDOWN = 90          # секунд между вопросами одного игрока
+# Партнёрская программа Telegram. Создать её может только аккаунт-владелец
+# (bots.updateStarRefProgram доступен лишь пользователям), поэтому бот
+# только хранит параметры и показывает владельцу, что настроить.
+AFF_COMMISSION_PERMILLE = 100   # 10%
+AFF_DURATION_MONTHS = 3
+# ID чата, где бот принимает промпты на генерацию. Задаётся переменной
+# окружения: создать группу может только аккаунт человека, бот — не может.
+GEN_CHAT_ID = os.environ.get("GEN_CHAT_ID", "").strip()
 PACKS = {
     "test_1star": (1, "Тест 1 звезда"),
     "coins_100": (100, "100 монет"),
@@ -144,6 +164,9 @@ PACKS = {
     "fall_boost": (PACK_FALL_BOOST, "Звездопад+ на 3 дня — взнос в общий пул осколков"),
     # Заморозка серии: пропуск ровно одного дня не обнуляет дневную серию.
     "freeze_stars": (FREEZE_COST_STARS, "Заморозка серии"),
+    # Пакеты генераций картинок.
+    "gen_pack": (GEN_PACK_STARS, "%d генераций картинок" % GEN_PACK_COUNT),
+    "gen_pack_big": (GEN_PACK_BIG_STARS, "%d генераций картинок" % GEN_PACK_BIG_COUNT),
 }
 REF_COUPON_PACK = "coins_100_ref"
 
@@ -583,7 +606,8 @@ def gift_catalog_view():
 
 ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads",
           "buy:contest_entry": "contest_entry", "buy:fall_boost": "fall_boost",
-          "buy:freeze_stars": "freeze_stars"}
+          "buy:freeze_stars": "freeze_stars",
+          "buy:gen_pack": "gen_pack", "buy:gen_pack_big": "gen_pack_big"}
 
 def apply_referral(user_id, payload):
     """Один раз за приглашённого: 50 монет пригласившему и 20 новому."""
@@ -837,6 +861,18 @@ async def help_(message: types.Message):
 async def buy(message: types.Message):
     await send_invoice(message.chat.id, "coins_100", message.from_user.id)
 
+
+@dp.message(Command("genpack"))
+async def genpack_cmd(message: types.Message):
+    """Пакет генераций прямо в чате-генераторе."""
+    await send_invoice(message.chat.id, "gen_pack", message.from_user.id)
+
+
+@dp.message(Command("genpackbig"))
+async def genpackbig_cmd(message: types.Message):
+    """Большой пакет генераций (30 штук)."""
+    await send_invoice(message.chat.id, "gen_pack_big", message.from_user.id)
+
 async def send_invoice(chat_id: int, payload: str, user_id=None):
     # Подписка: цена берётся из тарифов, а не из PACKS.
     if payload in SUBSCRIPTION_TIERS:
@@ -1001,6 +1037,11 @@ def grant(user_id, payload):
         st["pool_earned"] = int(st.get("pool_earned", 0))
         logging.info("POOL contrib user=%s stars=%s dist=%s margin=%s",
                      user_id, stars_paid, _dist, _margin)
+    elif payload in ("gen_pack", "gen_pack_big"):
+        acc = acc_of(d, user_id)
+        n = GEN_PACK_COUNT if payload == "gen_pack" else GEN_PACK_BIG_COUNT
+        acc["gen_left"] = int(acc.get("gen_left", 0)) + n
+        acc["gen_total"] = int(acc.get("gen_total", 0)) + n
     elif payload == "freeze_stars":
         acc = acc_of(d, user_id)
         st = acc.setdefault("freeze", {})
@@ -2740,6 +2781,144 @@ async def api_mira_hint(request):
                   "(что человек имел в виду на самом деле). Без пояснений, только фразы.")
     return web.json_response({"ok": True, "url": mira_link(prompt),
                               "reward": PROMO_REWARD, "claimed": bool(promo.get("claimed"))})
+
+
+async def api_ask_shards(request):
+    """Оплата текстового вопроса Mira осколками — сток для осколков.
+
+    POST /api/ask_shards
+      body: {init_data, q}
+    Списывает MIRA_ASK_SHARDS осколков и отдаёт deep-link на Mira с
+    подставленным вопросом. Это расход осколков: они тратятся, а не копятся.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    st = acc.setdefault("ask", {})
+    now = int(time.time())
+    last = int(st.get("last", 0) or 0)
+    if now - last < MIRA_ASK_COOLDOWN:
+        return web.json_response({"ok": False, "error": "cooldown",
+                                  "wait": MIRA_ASK_COOLDOWN - (now - last),
+                                  **star_view(acc)})
+    have = shards_of(acc)
+    if have < MIRA_ASK_SHARDS:
+        return web.json_response({"ok": False, "error": "not enough shards",
+                                  "need": MIRA_ASK_SHARDS, "have": have,
+                                  **star_view(acc)})
+    try:
+        q = str(body.get("q", ""))[:200]
+    except Exception:
+        q = ""
+    shards_add(acc, -MIRA_ASK_SHARDS, "mira_ask")
+    st["last"] = now
+    st["asked"] = int(st.get("asked", 0)) + 1
+    save_store(d)
+    prompt = ("Ответь на вопрос игрока: %s" % q) if q else \
+             ("Придумай 5 фраз с подтекстом для игры-квиза. Без пояснений.")
+    return web.json_response({"ok": True, "url": mira_link(prompt),
+                              "spent": MIRA_ASK_SHARDS, **star_view(acc)})
+
+
+async def api_gen_pack(request):
+    """Состояние пакета генераций: сколько осталось и по какой цене докупить.
+
+    POST /api/gen_pack
+      body: {init_data}
+    Покупка идёт инвойсом бота (payload gen_pack / gen_pack_big) —
+    этот эндпоинт только показывает остаток.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    return web.json_response({
+        "ok": True,
+        "left": int(acc.get("gen_left", 0)),
+        "total": int(acc.get("gen_total", 0)),
+        "price": GEN_PACK_STARS,
+        "price_big": GEN_PACK_BIG_STARS,
+        "count": GEN_PACK_COUNT,
+        "count_big": GEN_PACK_BIG_COUNT,
+    })
+
+
+async def api_gen_spend(request):
+    """Списание одной генерации (звёзды уже собраны ботом).
+
+    POST /api/gen_spend
+      body: {init_data, stars}
+    Списывается только когда результат выдан. Фактическое списание звёзд
+    делает Telegram по инвойсу — здесь мы ведём учёт остатка пак��та.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    uid = user_from_init(parts)
+    if not uid:
+        return web.json_response({"error": "no user"}, status=401)
+    d = load_store(); acc = acc_of(d, uid)
+    left = int(acc.get("gen_left", 0))
+    if left <= 0:
+        return web.json_response({"ok": False, "error": "no pack",
+                                  "price": GEN_PACK_STARS})
+    acc["gen_left"] = left - 1
+    save_store(d)
+    return web.json_response({"ok": True, "left": acc["gen_left"]})
+
+
+async def api_affiliate(request):
+    """Параметры партнёрской программы + ссылка для владельца.
+
+    POST /api/affiliate
+      body: {init_data}
+    Программу создаёт только аккаунт-владелец мини-приложения:
+    Mini App Profile -> Edit -> Affiliate Program. Бот (bots.updateStarRefProgram)
+    её создать не может. Здесь храним параметры, которые владелец выставит
+    в профиле, и отдаём ссылку, которую он раздаёт.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    parts = validate_init_data(body.get("init_data", ""))
+    if not parts:
+        return web.json_response({"error": "bad init_data"}, status=401)
+    d = load_store()
+    prog = d.setdefault("_affiliate", {})
+    prog.setdefault("commission_permille", AFF_COMMISSION_PERMILLE)
+    prog.setdefault("duration_months", AFF_DURATION_MONTHS)
+    prog.setdefault("enabled", False)
+    save_store(d)
+    link = "https://t.me/%s?startapp=ref_%s" % (BOT_USERNAME, MIRA_REF)
+    return web.json_response({
+        "ok": True,
+        "commission_permille": prog["commission_permille"],
+        "commission_percent": round(prog["commission_permille"] / 10, 1),
+        "duration_months": prog["duration_months"],
+        "enabled": prog["enabled"],
+        "link": link,
+        "where": "Mini App Profile -> Edit -> Affiliate Program",
+    })
 
 
 async def api_freeze(request):
@@ -5071,6 +5250,10 @@ def build_app(include_webhook=False):
     app.router.add_post("/api/promo/click", api_promo_click)
     app.router.add_post("/api/promo/claim", api_promo_claim)
     app.router.add_post("/api/mira/hint", api_mira_hint)
+    app.router.add_post("/api/ask_shards", api_ask_shards)
+    app.router.add_post("/api/gen_pack", api_gen_pack)
+    app.router.add_post("/api/gen_spend", api_gen_spend)
+    app.router.add_post("/api/affiliate", api_affiliate)
     app.router.add_post("/api/promo/stats", api_promo_stats)
     app.router.add_post("/api/promo/return", api_promo_return)
     app.router.add_post("/api/ads/stats", api_ads_stats)
@@ -5369,6 +5552,93 @@ async def on_vote(call: types.CallbackQuery):
                           f"(\u0421\u0435\u0439\u0447\u0430\u0441: {total})", show_alert=False)
     except Exception as e:
         logging.warning("on_vote failed: %s", e)
+
+
+# ================= ЧАТ ГЕНЕРАЦИИ =================
+# Бот принимает промпт в группе-генераторе и возвращает картинку.
+# Генерация идёт через pollinations.ai — ключ не нужен, поэтому себестоимость
+# для нас нулевая и пакет звёзд держит маржу целиком.
+GEN_API = "https://image.pollinations.ai/prompt/"
+GEN_MODEL = "flux"
+GEN_TIMEOUT = 180
+
+
+def gen_chat_id(d):
+    """Id чата-генератора. Узнаётся автоматически по первому сообщению."""
+    return str(d.get("_gen_chat", "") or "")
+
+
+async def gen_pollinations(prompt: str):
+    """Скачивает картинку по промпту. Возвращает bytes или None."""
+    import aiohttp
+    q = urllib.parse.quote(prompt[:400])
+    url = (f"{GEN_API}{q}?width=1024&height=1024&nologo=true"
+           f"&model={GEN_MODEL}&seed={random.randint(1, 999999)}")
+    timeout = aiohttp.ClientTimeout(total=GEN_TIMEOUT)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+        async with s.get(url) as r:
+            if r.status != 200:
+                logging.warning("GEN http %s", r.status)
+                return None
+            data = await r.read()
+            if len(data) < 2000:
+                return None
+            return data
+
+
+@dp.message(F.chat.type.in_({"group", "supergroup"}))
+async def gen_group_handler(message: types.Message):
+    """Промпт в группе-генераторе -> картинка. Списывает одну генерацию."""
+    chat = message.chat
+    # Канал проекта — не генератор, туда не вмешиваемся.
+    try:
+        if int(chat.id) == int(CHAT_ID):
+            return
+    except Exception:
+        pass
+    text = (message.text or message.caption or "").strip()
+    if not text:
+        return
+    if text.startswith("/"):
+        return
+    d = load_store()
+    # Автоопределение: первое сообщение в группе задаёт id генератора.
+    d["_gen_chat"] = str(chat.id)
+    uid = message.from_user.id if message.from_user else 0
+    acc = acc_of(d, uid)
+    left = int(acc.get("gen_left", 0))
+    if left <= 0:
+        save_store(d)
+        await message.reply(
+            "🎨 <b>Пакет генераций закончился</b>\n\n"
+            "Докупи в игре: вкладка «✨ Звёзды» → «Нарисуть картинку».\n"
+            f"Или прямо здесь: /genpack — пришлю инвойс.")
+        return
+    save_store(d)
+    status = await message.reply("⏳ Рисую... это 10–30 секунд.")
+    try:
+        data = await gen_pollinations(text)
+    except Exception as e:
+        logging.warning("GEN error %s", e)
+        data = None
+    if not data:
+        await status.edit_text("😕 Не получилось нарисовать. Попробуй другой промпт.")
+        return
+    d = load_store(); acc = acc_of(d, uid)
+    acc["gen_left"] = max(0, int(acc.get("gen_left", 0)) - 1)
+    acc["gen_used"] = int(acc.get("gen_used", 0)) + 1
+    save_store(d)
+    try:
+        await bot.send_photo(chat_id=chat.id, photo=io.BytesIO(data),
+                             caption=f"🎨 <b>{text[:200]}</b>\n\n"
+                                     f"Осталось генераций: {acc['gen_left']}",
+                             reply_to_message_id=message.message_id)
+    except Exception as e:
+        logging.warning("GEN send error %s", e)
+    try:
+        await status.delete()
+    except Exception:
+        pass
 
 
 async def main():
