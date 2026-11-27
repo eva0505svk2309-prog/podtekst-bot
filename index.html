@@ -588,7 +588,8 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
 </section>
 
 <div id="ghost" class="hidden"></div>
-<div class="small"><a href="https://t.me/podtekst_game_bot">канал</a> ·
+<div class="small"><a href="https://t.me/podtekst_game">канал</a> ·
+ <a href="https://t.me/podtekst_game_bot">бот</a> ·
  <span id="ts"></span></div>
 
 <script>
@@ -1007,7 +1008,7 @@ var LOC=(function(){
     },
     wallet:function(){var o=st();return Promise.resolve({coins:o.coins,lives:o.lives,noads:false,streak:o.streak,best:o.best,level:o.level});},
     referral:function(){var o=st();o.invited=o.invited||0;var left=3-(o.invited%3);if(!o.invited%3)left=3;
-      var link="https://t.me/podtekst_game_bot?start=ref"+((o.uid||(typeof ME_UID!=="undefined"&&ME_UID)||555001));
+      var link="https://t.me/podtekst_game_bot?start=ref"+String(o.uid||(typeof ME_UID!=="undefined"&&ME_UID)||555001);
       return Promise.resolve({ok:true,invited:o.invited,left:left,link:link,bonus:50,new_bonus:20,coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level,noads:false});},
     promo:function(){var o=st();o.promo=o.promo||{claimed:false,clicks:0};
       return Promise.resolve({ok:true,claimed:!!o.promo.claimed,clicks:o.promo.clicks||0,coins:o.coins,lives:o.lives,streak:o.streak,best:o.best,level:o.level,noads:false});},
@@ -2168,7 +2169,7 @@ var MIRA_REF_URL="https://t.me/mira?start=ref_8684637509";
 async function loadReferral(){
  var j=await api2("/api/referral",{});
  if(!j||!j.ok)return;
- var box=$("refLink"); if(box){ var lk=j.link||("https://t.me/"+BOT+"?start=ref"+(ME_UID||"")); box.value=lk; SHARE_URL=lk; }
+ var box=$("refLink"); if(box){ var lk=j.link||("https://t.me/"+BOT+"?start=ref"+String(ME_UID||"")); box.value=lk; SHARE_URL=lk; }
  var st=$("refStat"); if(st) st.textContent="Приглашено: "+(j.invited||0)+" · до бонуса +100 🪙 осталось "+(j.left||3);
  /* Купон: 100 монет за 80 ⭐ вместо 100. Подставляется автоматически. */
  var cp=$("refCoupon"); if(cp){
@@ -2332,7 +2333,9 @@ function shareResult(){
   var score=S.streak||0;
   // Реферальная ссылка: с payload, иначе виральный цикл разорван.
   var uid=(window.S&&S.uid)||(typeof me!=="undefined"&&me&&me.uid)||null;
-  var link = SHARE_URL || ("https://t.me/"+BOT+"?start=ref"+(uid||ME_UID||""));
+  var uid2=uid||ME_UID||"";
+  var link = SHARE_URL || ("https://t.me/"+BOT+"?start=ref"+uid2);
+  if(!uid2){ link="https://t.me/"+BOT+"?start=ref"; }
   var text="Я набрал "+score+" подряд в ПОДТЕКСТЕ — угадываю скрытый смысл в обычных фразах. Сыграй так же: "+link;
   // 1) Нативный диалог Telegram
   try{
@@ -2363,7 +2366,8 @@ $("mShare").onclick=function(){shareResult();};
 $("pRefresh").onclick=async function(){await m3Api("profile");renderProfile();toast("Профиль обновлён");};
 $("pShare").onclick=function(){
   var uid=(window.S&&S.uid)||null;
-  var link="https://t.me/"+BOT+"?start=ref"+(uid||"");
+  var uid3=String(uid||ME_UID||"");
+  var link="https://t.me/"+BOT+"?start=ref"+uid3;
   var txt="🎄 Я в ПОДТЕКСТЕ: уровень "+m3.lvl+" · рекорд "+m3.best+" очков · гирлянд "+m3.garland
     +" · достижений "+achGot.length+"/"+ACH_LIST.length+". Сыграй и обгони: "+link;
   try{
