@@ -357,6 +357,9 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   <div id="cardsGrid" style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px"></div>
   <button class="pri" id="openCardBtn" style="width:100%">🃏 Открыть карточку — 30 🪙</button>
   <div class="small" style="margin-top:6px">Редкие выпадают реже. Чем больше коллекция — тем выше шанс на легендарную.</div>
+  <div class="small" style="margin-top:7px;padding:7px 9px;border-radius:10px;background:#1a1430;border:1px solid #3a2a6b">
+   <b>Зачем карточки:</b> каждая N-я карта одной редкости даёт подарок — монеты, жизни, а легендарная ещё и отключает рекламу. Дубли можно обменять: чем редче карта, тем больше монет и осколков звёзд.
+  </div>
  </div>
  <div class="card" style="margin-bottom:10px">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
@@ -1130,7 +1133,25 @@ async function loadCards(){
  for(const k in (j.counts||{})){parts.push(RAR_ICON[k]+" "+RAR_NAME[k]+": "+(j.counts[k]||0));}
  $("cardsRar").textContent=parts.length?parts.join("  ·  "):"Пока пусто — открой первую карточку";
  const gl=$("cardsGifts");
- if(gl){ gl.innerHTML=(j.gifts||[]).map(x=>'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border-radius:9px;background:#2a1f52;border:1px solid #6b5aa8;font-size:11px">'+RAR_ICON[x.rarity]+' '+x.need+' → '+x.title+'</span>').join(""); }
+ if(gl){
+  const pr=j.progress||[];
+  if(pr.length){
+   gl.innerHTML='<div style="font-weight:700;font-size:12px;margin-bottom:5px">🎁 Что даёт коллекция</div>'+
+    pr.map(function(p){
+     const pct=Math.min(100,Math.round((p.have/(p.need*(p.done+1)))*100));
+     return '<div style="margin-bottom:7px">'+
+      '<div style="display:flex;justify-content:space-between;font-size:11px">'+
+       '<span>'+(p.icon||RAR_ICON[p.rarity]||"")+' '+(p.name||RAR_NAME[p.rarity]||p.rarity)+'</span>'+
+       '<span style="color:#9fb6d4">'+(p.have||0)+' / '+(p.need*(p.done+1))+'</span></div>'+
+      '<div style="height:5px;background:#1e2c47;border-radius:3px;margin:3px 0 2px;overflow:hidden">'+
+       '<div style="height:100%;width:'+pct+'%;background:'+(RAR_CLR[p.rarity]||"#9c7bff")+'"></div></div>'+
+      '<div style="font-size:11px;color:#ffd76e">'+
+       (p.next_need>0?('ещё '+p.next_need+' → '+p.title):('🎁 Порог взят: '+p.title))+'</div></div>';
+    }).join("");
+  }else{
+   gl.innerHTML=(j.gifts||[]).map(x=>'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border-radius:9px;background:#2a1f52;border:1px solid #6b5aa8;font-size:11px">'+RAR_ICON[x.rarity]+' '+x.need+' → '+x.title+'</span>').join("");
+  }
+ }
  const g=$("cardsGrid");g.innerHTML="";
  if(!items.length){g.innerHTML='<div class="small">Коллекция пуста</div>';return;}
  items.forEach(c=>{
@@ -1142,16 +1163,21 @@ async function loadCards(){
    (c.gift_total?('<div style="color:#ffd76e;margin-top:3px;font-size:11px">🎁 до подарка: '+c.gift_need+'</div>'):'');
   if(c.count>=3){
    const ex=document.createElement("button");
-   ex.textContent="Обменять 3 → 15 🪙";
+   const exCoins=(j.exchange&&j.exchange.coins&&j.exchange.coins[c.rarity])||15;
+   const exShards=(j.exchange&&j.exchange.shards&&j.exchange.shards[c.rarity])||0;
+   const exNeed=(j.exchange&&j.exchange.need)||3;
+   const exLabel="Обменять "+exNeed+" → "+exCoins+" 🪙"+(exShards?" + "+exShards+" ✨":"");
+   ex.textContent=exLabel;
    ex.style.cssText="margin-top:6px;padding:4px 8px;font-size:11px;width:100%;background:#3a2a6b;border:1px solid #9c7bff;color:#fff";
    ex.onclick=async(e)=>{
      e.stopPropagation();
      ex.disabled=true;ex.textContent="Меняю…";
      const j=await api2("/api/cards",{action:"exchange",card_id:c.id});
-     ex.disabled=false;ex.textContent="Обменять 3 → 15 🪙";
-     if(!j||!j.ok){toast(j&&j.error==="not_enough_cards"?"Нужно 3 одинаковых":"Не получилось");return;}
+     ex.disabled=false;ex.textContent=exLabel;
+     if(!j||!j.ok){toast(j&&j.error==="not_enough_cards"?"Нужно "+exNeed+" одинаковых":"Не получилось");return;}
      if(typeof j.coins==="number"){S.coins=j.coins;paint();}
-     toast("+15 🪙 за 3 карты");
+     if(typeof j.got_shards==="number"&&j.got_shards>0){try{S.shards=(S.shards||0)+j.got_shards;paint();}catch(e){}}
+     toast("+"+(j.got||exCoins)+" 🪙"+(j.got_shards?(" и +"+j.got_shards+" ✨ осколков"):""));
      loadCards();
    };
    d.appendChild(ex);
