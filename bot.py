@@ -3851,6 +3851,14 @@ CARD_GIFTS = [
 ]
 CARD_GIFT_THRESHOLDS = {k: n for k, n, _r, _t in CARD_GIFTS}
 
+# Обмен дублей. Раньше 3 одинаковые карты давали 15 монет — это меньше,
+# чем стоила открытая карточка (30 монет), то есть дубли были мусором.
+# Теперь дубли идут и в осколки звёзд, и в монеты, с ростом по редкости:
+# легендарный дубль — реальная ценность, а не «погасить и забыть».
+CARD_EXCHANGE_COINS = {"common": 15, "rare": 60, "epic": 180, "legend": 400}
+CARD_EXCHANGE_SHARDS = {"common": 10, "rare": 25, "epic": 60, "legend": 150}
+CARD_EXCHANGE_NEED = 3
+
 
 def _card_gift_check(acc, card_id):
     """Проверяет пороги подарков по коллекции. Возвращает список подарков.
@@ -3944,9 +3952,25 @@ def cards_view(acc):
         it["gift_next"] = (done + 1) * th if th else 0
         it["gift_total"] = th
         it["gift_have"] = by_rar.get(it["rarity"], 0)
+    # Прогресс к подаркам по редкости: сколько собрано, сколько ещё нужно
+    # и что за это дадут. Раньше игрок видел только счётчик карт и не понимал,
+    # к чему он идёт, поэтому коллекция и выглядела бессмысленной.
+    progress = []
+    for r, n, reward, title in CARD_GIFTS:
+        have = by_rar.get(r, 0)
+        done = int(stage.get(r, 0))
+        progress.append({"rarity": r, "name": RARITY_INFO[r]["name"],
+                         "icon": RARITY_INFO[r]["icon"], "have": have,
+                         "need": n, "done": done,
+                         "next_need": max(0, (done + 1) * n - have),
+                         "title": title})
     return {"ok": True, "total": total, "counts": counts, "items": items,
             "opened": acc.get("cards_opened", 0),
             "cost": CARD_OPEN_COST,
+            "progress": progress,
+            "exchange": {"need": CARD_EXCHANGE_NEED,
+                         "coins": CARD_EXCHANGE_COINS,
+                         "shards": CARD_EXCHANGE_SHARDS},
             "gifts": [{"rarity": r, "need": n, "title": t} for r, n, _x, t in CARD_GIFTS],
             "rarities": [{"key": k, "name": n, "icon": i, "weight": w}
                          for k, n, i, w in CARD_RARITY]}
@@ -3992,8 +4016,14 @@ async def api_cards(request):
     if action == "exchange":
         # 3 одинаковые карты -> 15 монет. Синька: дублики не мусор, а ресурс.
         cid = str(body.get("card_id", ""))
-        need = 3
-        give = 15
+        card = CARD_BY_ID.get(cid)
+        if not card:
+            save_store(d)
+            return web.json_response({"ok": False, "error": "unknown card"})
+        rarity = card[1]
+        need = CARD_EXCHANGE_NEED
+        give = CARD_EXCHANGE_COINS.get(rarity, 15)
+        give_shards = CARD_EXCHANGE_SHARDS.get(rarity, 0)
         raw = acc.setdefault("cards", {})
         have = int(raw.get(cid, 0))
         if have < need:
@@ -4002,8 +4032,13 @@ async def api_cards(request):
                                       "have": have, "need": need})
         raw[cid] = have - need
         acc["coins"] += give
+        # Осколки идут без потолка тира: это честный обмен накопленного,
+        # а не дроп из события, поэтому дневной лимит его не режет.
+        got_shards = shards_add(acc, give_shards, "card_exchange", enforce_cap=False)
         save_store(d)
         return web.json_response({"ok": True, "coins": acc["coins"], "got": give,
+                                  "got_shards": int(got_shards),
+                                  "rarity": rarity,
                                   "state": cards_view(acc)})
 
     if action == "open":
