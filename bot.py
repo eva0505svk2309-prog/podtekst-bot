@@ -5726,14 +5726,26 @@ def _correct_index(options, answer):
     Ответ в DAILY_POSTS написан словами ("Третье. ..."), поэтому ищем
     самое длинное совпавшее порядковое слово. Если разбор вдруг сменит
     формат — ищем текст ответа внутри варианта.
+
+    ВАЖНО: порядковое слово берём ПЕРВОЕ ПО ПОЗИЦИИ, а не самое длинное.
+    Раньше выбиралось самое длинное совпадение, и разбор вида
+    "Третье. Первое — приглашение" разбирался как "Первое" — канал
+    показывал неверный правильный ответ. При одинаковой длине
+    ("первое" и "третье" по 6 букв) побеждал первый по словарю.
     """
     a = (answer or "").strip().lower()
     if not a:
         return None
     best = None
+    best_pos = None
     for word, idx in _ORD_WORDS.items():
-        if word in a and (best is None or len(word) > len(best)):
-            best = word
+        pos = a.find(word)
+        if pos < 0:
+            continue
+        # Позиция важнее длины; при равной позиции — длинное совпадение.
+        if (best_pos is None or pos < best_pos
+                or (pos == best_pos and len(word) > len(best))):
+            best, best_pos = word, pos
     if best is not None:
         idx = _ORD_WORDS[best]
         if 0 <= idx < len(options):
@@ -5742,6 +5754,7 @@ def _correct_index(options, answer):
         if o.strip().lower() == a:
             return i
     return None
+
 
 
 def _votes_store():
