@@ -40,6 +40,8 @@ button.pri{background:linear-gradient(135deg,#ff4d8d,#a86bff);border-color:trans
   background:radial-gradient(120% 120% at 50% 0%,#1b2a4a 0%,#080d18 100%);
   padding:8px;border-radius:18px;box-shadow:inset 0 2px 18px rgba(0,0,0,.6),0 8px 26px rgba(0,0,0,.45);
   touch-action:none;overflow:hidden;transition:transform .16s cubic-bezier(.34,1.56,.64,1),filter .2s}
+.cell.off{visibility:hidden}
+.cell.blk{background:linear-gradient(160deg,#4a3b32,#2b211a);opacity:.92;font-size:clamp(22px,7.4vw,36px)}
 .cell{aspect-ratio:1;border-radius:14px;position:relative;display:flex;align-items:center;justify-content:center;
   font-size:clamp(26px,9.2vw,46px);cursor:grab;user-select:none;-webkit-user-select:none;
   background:linear-gradient(160deg,#1d2f52,#111c33);
@@ -1639,6 +1641,27 @@ $("qDaily").onclick=async()=>{
 const N=6;
 const TYPES=['🎁','🧊','🍬','❄️','🔔','🕯️'];            /* 6 new-year tiles */
 const SPECIAL={BOMB:6,RAINBOW:7,CANDLE:8,FROST:9};
+const BLOCKER=10;                 /* 🧱 тупиковая фигурка: снимается только сбором рядом */
+const M3_LEVELS=[
+ {t:4,shape:"full",blk:0,moves:20},
+ {t:4,shape:"full",blk:0,moves:20},
+ {t:4,shape:"full",blk:0,moves:22},
+ {t:5,shape:"full",blk:0,moves:22},
+ {t:5,shape:"full",blk:4,moves:24},
+ {t:5,shape:"diamond",blk:0,moves:24},
+ {t:6,shape:"full",blk:6,moves:26},
+ {t:6,shape:"corner",blk:5,moves:26}
+];
+let curCfg=null,curCols=null,blkLeft=0;
+function ensureCfg(lv){curCfg=lvlCfg(lv||1);curCols=shapeCols(curCfg.shape);return curCfg}
+function lvlCfg(lv){var i=Math.max(0,Math.min(M3_LEVELS.length-1,(Number(lv)||1)-1));return M3_LEVELS[i]}
+function lvlTypeCount(lv){return lvlCfg(lv).t}
+function shapeCols(shape){var cols=[];for(var c=0;c<N;c++){var rows=[];for(var r=0;r<N;r++){
+ var ok=true;if(shape==="diamond"){ok=(Math.abs(r-(N-1)/2)+Math.abs(c-(N-1)/2))<=3.6;}
+ else if(shape==="corner"){ok=!((r<2&&c<2)||(r>=N-2&&c>=N-2));}
+ if(ok)rows.push(r)}cols.push(rows)}return cols}
+function isActive(r,c){return !!(curCols&&curCols[c]&&curCols[c].indexOf(r)>=0)}
+function isBlocker(v){return v===BLOCKER}
 const GARLAND_MAX=10;
 let grid=[],sel=null,score=0,goal=0,moves=0,combo=0,busy=false,rng=Math.random;
 let dragFrom=null,dragMoved=false;
@@ -1651,14 +1674,16 @@ function seeded(){const d=new Date();const k=d.getFullYear()*10000+(d.getMonth()
 function rnd(n){return Math.floor(rng()*n)}
 function filled(){const g=[];for(let r=0;r<N;r++){g.push([]);for(let c=0;c<N;c++)g[r].push(-1)}return g}
 function isSpecial(v){return v>=SPECIAL.BOMB&&v<=SPECIAL.FROST}
+function isBlocker(v){return v===BLOCKER}
+function activeCount(){if(!curCols)return N*N;var k=0;for(var c=0;c<N;c++)k+=curCols[c].length;return k}
 function findMatches(g){const s=new Set();
- for(let r=0;r<N;r++){let run=1;for(let c=1;c<=N;c++){const same=c<N&&g[r][c]===g[r][c-1]&&g[r][c]!==-1&&!isSpecial(g[r][c]);
+ for(let r=0;r<N;r++){let run=1;for(let c=1;c<=N;c++){const same=c<N&&g[r][c]===g[r][c-1]&&g[r][c]!==-1&&!isSpecial(g[r][c])&&!isBlocker(g[r][c]);
   if(same)run++;else{if(run>=3)for(let x=c-run;x<c;x++)s.add(r+','+x);run=1}}}
- for(let c=0;c<N;c++){let run=1;for(let r=1;r<=N;r++){const same=r<N&&g[r][c]===g[r-1][c]&&g[r][c]!==-1&&!isSpecial(g[r][c]);
+ for(let c=0;c<N;c++){let run=1;for(let r=1;r<=N;r++){const same=r<N&&g[r][c]===g[r-1][c]&&g[r][c]!==-1&&!isSpecial(g[r][c])&&!isBlocker(g[r][c])&&!isBlocker(g[r][c]);
   if(same)run++;else{if(run>=3)for(let x=r-run;x<r;x++)s.add(x+','+c);run=1}}}
  return s}
 function hasMove(g){for(let r=0;r<N;r++)for(let c=0;c<N;c++)for(const[dr,dc]of[[0,1],[1,0]]){
-  const r2=r+dr,c2=c+dc;if(r2>=N||c2>=N)continue;const a=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=a;
+  const r2=r+dr,c2=c+dc;if(r2>=N||c2>=N)continue;if(!isActive(r,c)||!isActive(r2,c2))continue;const a=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=a;
   const ok=findMatches(g).size>0;const b=g[r][c];g[r][c]=g[r2][c2];g[r2][c2]=b;if(ok)return true}return false}
 function fxLayer(){return document.getElementById("fx")}
 function cellRect(r,c){const b=document.getElementById("board");const el=b.children[r*N+c];if(!el)return null;
@@ -1732,20 +1757,43 @@ function banner(txt){const b=document.getElementById("banner");if(!b)return;b.te
 function comboUI(n){const c=document.getElementById("comboBox");if(!c)return;if(n>1){c.textContent="КОМБО ×"+n;c.classList.add("on")}else c.classList.remove("on")}
 
 /* ===== BOARD ===== */
-function makeBoard(){let g=filled();for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);
- const fix=()=>{for(let i=0;i<60;i++){const m=findMatches(g);if(!m.size)break;
-  m.forEach(k=>{const p=k.split(",");g[+p[0]][+p[1]]=rnd(TYPES.length)})}};
- fix();let guard=0;while(!hasMove(g)&&guard++<40){g=filled();
-  for(let r=0;r<N;r++)for(let c=0;c<N;c++)g[r][c]=rnd(TYPES.length);fix()}
+function makeBoard(){var tc=lvlTypeCount(m3.lvl||1);var cfg=lvlCfg(m3.lvl||1);
+ /* выбираем клетки под тупики: не рядом друг с другом, чтобы не глушить ходы */
+ var cells=[];for(var c=0;c<N;c++)curCols[c].forEach(function(r){cells.push(r+","+c)});
+ cells.sort(function(){return rng()-0.5});
+ var bset=[];
+ for(var i=0;i<cells.length&&bset.length<(cfg.blk||0);i++){var p=cells[i].split(","),r=+p[0],c=+p[1];
+  var near=false;
+  for(var q=0;q<bset.length;q++){var bp=bset[q].split(","),br=+bp[0],bc=+bp[1];
+   if(Math.abs(br-r)+Math.abs(bc-c)<=1){near=true;break}}
+  if(!near)bset.push(cells[i])}
+ blkLeft=bset.length;
+ var g=filled(),guard=0;
+ do{
+  g=filled();
+  for(var cc2=0;cc2<N;cc2++)curCols[cc2].forEach(function(r){g[r][cc2]=rnd(tc)});
+  for(var b=0;b<bset.length;b++){var pb=bset[b].split(",");g[+pb[0]][+pb[1]]=BLOCKER}
+  for(let it=0;it<60;it++){const m=findMatches(g);if(!m.size)break;
+   m.forEach(k=>{const pp=k.split(",");g[+pp[0]][+pp[1]]=rnd(tc)})}
+  guard++;
+ }while(!hasMove(g)&&guard<120);
+ /* если блокеры всё же убили все ходы — убираем их по одному */
+ while(!hasMove(g)&&blkLeft>0){blkLeft--;var g2=filled();
+  for(var c3=0;c3<N;c3++)curCols[c3].forEach(function(r){g2[r][c3]=rnd(tc)});
+  for(let it2=0;it2<60;it2++){const m2=findMatches(g2);if(!m2.size)break;
+   m2.forEach(k=>{const pp2=k.split(",");g2[+pp2[0]][+pp2[1]]=rnd(tc)})}
+  if(hasMove(g2))g=g2;}
  return g}
-function tileEmoji(v){if(v===SPECIAL.BOMB)return "💣";if(v===SPECIAL.RAINBOW)return "🌈";
+function tileEmoji(v){if(v===BLOCKER)return "\u{1F9F1}";if(v===SPECIAL.BOMB)return "💣";if(v===SPECIAL.RAINBOW)return "🌈";
  if(v===SPECIAL.CANDLE)return "🕯️";if(v===SPECIAL.FROST)return "❄️";
  return v>=0&&v<TYPES.length?TYPES[v]:""}
 function render(pop){const bd=document.getElementById("board");if(!bd)return;bd.innerHTML="";
  for(let r=0;r<N;r++)for(let c=0;c<N;c++){const d=document.createElement("div");
   const v=grid[r][c];d.className="cell";
+  if(!isActive(r,c)){d.classList.add("off");d.dataset.r=r;d.dataset.c=c;bd.appendChild(d);continue}
   if(pop&&pop.has(r+','+c))d.classList.add("pop");
   if(sel&&sel.r===r&&sel.c===c)d.classList.add("sel");
+  if(v===BLOCKER)d.classList.add("blk");
   if(v===SPECIAL.BOMB)d.classList.add("bomb");
   if(v===SPECIAL.RAINBOW)d.classList.add("rainbow");
   if(v===SPECIAL.CANDLE)d.classList.add("candle");
@@ -1783,6 +1831,7 @@ function cellAt(x,y){
 
 function onDown(e){if(busy)return;const el=e.currentTarget;if(!el||!el.dataset)return;
  const r=+el.dataset.r,c=+el.dataset.c;
+ if(!isActive(r,c))return;
  dragFrom={r,c};dragMoved=false;
  /* ВАЖНО: НЕ используем setPointerCapture — он перенаправляет pointermove
     на исходную клетку, из-за чего перетаскивание не срабатывало. */
@@ -1822,7 +1871,10 @@ function tap(r,c){if(busy)return;if(!sel){sel={r,c};render();return}
 function cellEl(r,c){var bd=document.getElementById("board");return bd?bd.querySelector('[data-r="'+r+'"][data-c="'+c+'"]'):null;}
 function rectOf(r,c){var el=cellEl(r,c);return el?el.getBoundingClientRect():null;}
 function animMove(el,dx,dy,dur){if(!el)return;el.style.transition="none";el.style.transform="translate("+dx+"px,"+dy+"px)";void el.offsetWidth;el.style.transition="transform "+(dur||200)+"ms cubic-bezier(.34,1.56,.64,1)";requestAnimationFrame(function(){requestAnimationFrame(function(){el.style.transform="translate(0,0)";});});}
-async function doSwap(r1,c1,r2,c2){if(busy)return;busy=true;
+async function doSwap(r1,c1,r2,c2){if(busy)return;
+ if(!isActive(r1,c1)||!isActive(r2,c2))return;
+ if(isBlocker(grid[r1][c1])||isBlocker(grid[r2][c2])){shake();return}
+ busy=true;
  var beforeA=rectOf(r1,c1), beforeB=rectOf(r2,c2);
  const a=grid[r1][c1],b=grid[r2][c2];
  grid[r1][c1]=b;grid[r2][c2]=a;
@@ -1849,6 +1901,10 @@ async function resolve(){let chain=0;
   let specialMade=null,firstCell=null;
   m.forEach(k=>{const p=k.split(",");const r=+p[0],c=+p[1]; try{sparkBurst(Array.from(m));}catch(e){}
    grid[r][c]=-1;
+   [[1,0],[-1,0],[0,1],[0,-1]].forEach(function(d){var nr=r+d[0],nc=c+d[1];
+    if(nr<0||nr>=N||nc<0||nc>=N)return;
+    if(grid[nr][nc]===BLOCKER){grid[nr][nc]=-1;blkLeft=Math.max(0,blkLeft-1);
+     try{burst(nr,nc,"#8d6e63",16)}catch(e){}}});
    if(!firstCell)firstCell={r,c};
    burst(r,c,chain>1?"#f5c542":"#e03131",chain>2?18:10);
    /* light one garland lamp per match step */
@@ -1870,17 +1926,20 @@ async function resolve(){let chain=0;
  upd();queueSave();}
 
 /* ===== GRAVITY with new-year fall ===== */
-function gravity(){for(let c=0;c<N;c++){let w=N-1;for(let r=N-1;r>=0;r--)if(grid[r][c]!==-1){grid[w][c]=grid[r][c];if(w!==r)grid[r][c]=-1;w--}
- for(let r=w;r>=0;r--)grid[r][c]=rnd(TYPES.length)}}
+function gravity(){var tc=lvlTypeCount(m3.lvl||1);
+ for(var c=0;c<N;c++){var rows=curCols[c],w=rows.length-1;
+  for(var i=rows.length-1;i>=0;i--){var r=rows[i];if(grid[r][c]!==-1){grid[rows[w]][c]=grid[r][c];if(w!==i)grid[r][c]=-1;w--}}
+  for(var j=w;j>=0;j--){var r2=rows[j];grid[r2][c]=rnd(tc)}}}
 
 function upd(){document.getElementById("moves").textContent=moves;
- document.getElementById("goalTxt").textContent="цель: "+goal;
+ document.getElementById("goalTxt").textContent="цель: "+goal+(blkLeft?" · 🧱 "+blkLeft:"");
  const sc=document.getElementById("score");if(sc)sc.textContent=score;
  document.getElementById("bar").firstElementChild.style.width=Math.min(100,goal?score/goal*100:0)+"%"}
-function levelSetup(){score=0;goal=m3Goal(m3.lvl||1);moves=M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
+function levelSetup(){score=0;curCfg=lvlCfg(m3.lvl||1);curCols=shapeCols(curCfg.shape);
+ goal=m3Goal(m3.lvl||1);moves=curCfg.moves||M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
  var cb0=$("mContinue"); if(cb0) cb0.style.display="none";
  rng=Math.random;grid=makeBoard();comboUI(0);resetGarland();upd();render();
- const h=document.getElementById("m3hint");if(h)h.textContent="Собери гирлянду — 10 ламп и бонус!";
+ const h=document.getElementById("m3hint");if(h)h.textContent=(curCfg.blk?"Разбей 🧱 — собери ряд рядом с тупиком! ":"Собери гирлянду — 10 ламп и бонус!");
  slate("🎄 НОВЫЙ УРОВЕНЬ · "+S.lvl);}
 function startLevel(){m3.plays=(m3.plays||0)+1;if(S.lives<=0){document.getElementById("m3hint").textContent="Жизни кончились — посмотри рекламу в боте";return}
  S.lives--;save();levelSetup()}
@@ -1976,8 +2035,9 @@ function m3HasProgress(){
 function restoreM3(m){
  if(!m)return false;
  m3=Object.assign({},m3,m);
+ curCfg=lvlCfg(m3.lvl||1);curCols=shapeCols(curCfg.shape);
  score=Number(m.score)||0;
- moves=Math.max(0,Math.min(M3_MAX_MOVES,Number(m.moves)||M3_MAX_MOVES));
+ moves=Math.max(0,Math.min(curCfg.moves||M3_MAX_MOVES,Number(m.moves)||curCfg.moves||M3_MAX_MOVES));
  goal=m3Goal(m3.lvl||1);
  lastGoal=goal;
  var cb=$("mContinue"); if(cb) cb.style.display=m3HasProgress()?"":"none";
@@ -2322,7 +2382,7 @@ function drawDaily(){const r=dailyIdx();const w=$("dBoard");w.innerHTML="";
  const g=rngPick();g.forEach(t=>{const c=document.createElement("div");c.className="cell";c.textContent=t;w.appendChild(c)});
  $("dTitle").textContent="Челлендж дня 🏆";$("dText").textContent="Собери "+TYPES[r%TYPES.length]+" в ряд 3 раза. Одинаковая доска у всех."}
 function rngPick(){const r=dailyIdx();const out=[];for(let i=0;i<6;i++)out.push(TYPES[Math.floor(r()*TYPES.length)]);return out}
-$("dStart").onclick=()=>{rng=seeded();score=0;goal=800;moves=18;combo=0;sel=null;grid=makeBoard();upd();render();
+$("dStart").onclick=()=>{rng=seeded();score=0;ensureCfg(1);goal=800;moves=18;combo=0;sel=null;grid=makeBoard();upd();render();
  $("m3hint").textContent="Челлендж дня 🏆 — одинаковые задания у всех";document.querySelector('.tabs button[data-v=m3]').click()};
 /* Настоящий шеринг: пользователь сам выбирает чат/друга в Telegram.
    Раньше кнопка просто открывала бота — шарить было нечем. */
@@ -2392,7 +2452,7 @@ try{checkPromoReturn();}catch(e){}
     try{const v=JSON.parse(localStorage.getItem("pt_days")||"[]");if(Array.isArray(v))visitDays.push.apply(visitDays,v);}catch(e){}
     markVisit();
     buildGarland();
-    score=0;goal=m3Goal(m3.lvl||1);moves=M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
+    score=0;ensureCfg(m3.lvl||1);goal=m3Goal(m3.lvl||1);moves=curCfg.moves||M3_MAX_MOVES;combo=0;sel=null;dragFrom=null;
     rng=Math.random;grid=makeBoard();comboUI(0);upd();render();
     document.getElementById("m3hint").textContent="Собери гирлянду — 10 ламп и бонус!";
     startSnow();

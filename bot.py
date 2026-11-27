@@ -2492,6 +2492,37 @@ M3_GOAL_GROWTH = 1.32
 M3_MAX_MOVES = 20
 M3_GARLAND_MAX = 10
 
+M3_LEVELS = [
+    # t — сколько базовых фигур доступно, shape — форма поля, blk — тупиков, moves — ходы
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 20},
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 20},
+    {"t": 4, "shape": "full",    "blk": 0, "moves": 22},
+    {"t": 5, "shape": "full",    "blk": 0, "moves": 22},
+    {"t": 5, "shape": "full",    "blk": 4, "moves": 24},
+    {"t": 5, "shape": "diamond", "blk": 0, "moves": 24},
+    {"t": 6, "shape": "full",    "blk": 6, "moves": 26},
+    {"t": 6, "shape": "corner",  "blk": 5, "moves": 26},
+]
+
+def m3_level_cfg(level):
+    """Конфиг уровня: единый источник правды для клиента и сервера."""
+    try:
+        lv = max(1, int(level))
+    except Exception:
+        lv = 1
+    return M3_LEVELS[min(lv, len(M3_LEVELS)) - 1]
+
+def m3_max_moves(level):
+    return int(m3_level_cfg(level).get("moves", M3_MAX_MOVES))
+
+def level_hint(body, m):
+    """Уровень, по которому считаем лимиты: текущий серверный, если клиент не указал."""
+    try:
+        v = int(body.get("level", m.get("lvl", 1)))
+    except Exception:
+        v = int(m.get("lvl", 1))
+    return max(1, v)
+
 def m3_goal(level):
     try:
         lv = max(1, int(level))
@@ -2514,13 +2545,16 @@ ACHIEVEMENTS = [
 
 def m3_view(acc):
     m = acc.get("m3") or {}
-    return {"m3": {"lvl": m.get("lvl", 1), "score": m.get("score", 0),
-                   "moves": m.get("moves", M3_MAX_MOVES), "best": m.get("best", 0),
+    lv = int(m.get("lvl", 1))
+    return {"m3": {"lvl": lv, "score": m.get("score", 0),
+                   "moves": m.get("moves", m3_max_moves(lv)), "best": m.get("best", 0),
                    "plays": m.get("plays", 0), "garland": m.get("garland", 0),
                    "lamps": m.get("lamps", 0),
                    "combo": m.get("combo", 0), "maxcombo": m.get("maxcombo", 0),
                    "total": m.get("total", 0), "cleared": m.get("cleared", 0)},
-            "goal": m3_goal(m.get("lvl", 1)),
+            "goal": m3_goal(lv),
+            "cfg": {"t": m3_level_cfg(lv)["t"], "shape": m3_level_cfg(lv)["shape"],
+                    "blk": m3_level_cfg(lv)["blk"], "moves": m3_max_moves(lv)},
             "ach": acc.get("ach", []),
             "unlocked": sorted(ACHIEVEMENTS, key=lambda a: a[0]),
             **retention_view(acc),
@@ -2566,7 +2600,7 @@ async def api_m3(request):
     if action == "save":
         level = num("level", m.get("lvl", 1), 1, 9999)
         score = num("score", 0, 0, 10 ** 9)
-        moves = num("moves", M3_MAX_MOVES, 0, M3_MAX_MOVES)
+        moves = num("moves", m3_max_moves(level_hint(body, m)), 0, M3_MAX_MOVES)
         garland = num("garland", 0, 0, 10 ** 7)      # всего гирлянд за всё время
         lamps = num("lamps", 0, 0, M3_GARLAND_MAX)    # ламп в текущей гирлянде
         combo = num("combo", 0, 0, 99)
@@ -2577,6 +2611,10 @@ async def api_m3(request):
         cur = int(m.get("lvl", 1))
         if level > cur + 1:
             level = cur + 1
+        # Ходы ограничены конфигом уровня (уровень даёт больше ходов).
+        mv_max = m3_max_moves(cur)
+        if moves > mv_max:
+            moves = mv_max
         # Очки не могут превышать разумный предел для одного уровня.
         cap = m3_goal(level) * 4
         if score > cap:
@@ -2620,7 +2658,7 @@ async def api_m3(request):
                 logging.info("POOL payout user=%s units=%s m3", uid, _pool_u)
             m["lvl"] = cur + 1
             m["score"] = 0
-            m["moves"] = M3_MAX_MOVES
+            m["moves"] = m3_max_moves(cur + 1)
             unlock(acc, "level5") if m["lvl"] >= 5 else None
             unlock(acc, "level10") if m["lvl"] >= 10 else None
             if m["total"] >= 10000: unlock(acc, "m3_10k")
