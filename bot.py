@@ -23,6 +23,9 @@ CHANNEL    = os.environ.get("CHANNEL_URL", "https://t.me/podtekst_game")
 # ---- Партнёрский блок Mira: игрок получает монеты в игре, мы — токены Миры ----
 MIRA_REF   = os.environ.get("MIRA_REF", "8684637509")
 MIRA_URL   = f"https://t.me/mira?start=ref_{MIRA_REF}"
+# TON-кошелёк владельца: сюда идут комиссия партнёрской программы и вывод звёзд.
+# Адрес проверен (user-friendly, CRC16 сходится, основная сеть).
+TON_WALLET = os.environ.get("TON_WALLET", "UQAjBgYpu4d6sDYIqV7EO7ZO67V5aPw25Yxp0-IGOx4fl-qI").strip()
 PROMO_REWARD = 50          # 🪙 игроку за подключение Mira
 
 # ---- Рекламные кампании: клик по креативу ведёт по реферальной ссылке ----
@@ -3005,6 +3008,8 @@ async def api_affiliate(request):
     link = (AFF_LINKS.get("personal") or AFF_LINKS.get("channel") or
             AFF_LINKS.get("miniapp") or
             "https://t.me/%s?startapp=ref_%s" % (BOT_USERNAME, MIRA_REF))
+    # Куда платить комиссию и выводить звёзды — TON-кошелёк владельца.
+    payout = TON_WALLET
     return web.json_response({
         "ok": True,
         "links": {k: v for k, v in AFF_LINKS.items() if v},
@@ -3013,6 +3018,8 @@ async def api_affiliate(request):
         "duration_months": prog["duration_months"],
         "enabled": prog["enabled"],
         "link": link,
+        "payout": payout,
+        "payout_url": "https://tonviewer.com/" + TON_WALLET if TON_WALLET else "",
         "where": "Mini App Profile -> Edit -> Affiliate Program",
     })
 
