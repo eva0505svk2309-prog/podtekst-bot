@@ -13,7 +13,7 @@ BOT_USERNAME = os.environ.get("BOT_USERNAME", "podtekst_game_bot")
 
 # Принудительное обновление Mini App: меняем версию при каждом деплое,
 # иначе Telegram WebView отдаёт закэшированную старую страницу.
-BUILD = os.environ.get("BUILD_ID", "5")
+BUILD = os.environ.get("BUILD_ID", "6")
 if "?" not in WEBAPP_URL:
     WEBAPP_URL = f"{WEBAPP_URL}?v={BUILD}"
 elif "v=" not in WEBAPP_URL:
@@ -3019,7 +3019,10 @@ async def api_affiliate(request):
         "enabled": prog["enabled"],
         "link": link,
         "payout": payout,
-        "payout_url": "https://tonviewer.com/" + TON_WALLET if TON_WALLET else "",
+        "payout_url": ("https://fragment.com/address/" + TON_WALLET) if TON_WALLET else "",
+        "payout_hint": "Списание звёзд в TON делается вручную в Telegram: "
+                      "Мои звёзды -> Withdraw, там вводится адрес кошелька. "
+                      "Бот не может переводить Stars игрока (в Bot API нет такого метода).",
         "where": "Mini App Profile -> Edit -> Affiliate Program",
     })
 
@@ -5331,6 +5334,17 @@ def build_app(include_webhook=False):
     if include_webhook:
         app.router.add_post("/tg/{token}", webhook_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    # Публичный маркер сборки: видно, какой коммит реально едет в проде.
+    # Без него нельзя отличить новый деплой от старого процесса.
+    async def api_build(request):
+        return web.json_response({
+            "ok": True,
+            "build": BUILD,
+            "wallet": TON_WALLET,
+            "goal_base": M3_BASE_GOAL,
+            "goal_growth": M3_GOAL_GROWTH,
+        })
+    app.router.add_get("/api/build", api_build)
     app.router.add_get("/api/terms", api_terms)
     app.router.add_post("/api/terms", api_terms)
     app.router.add_post("/api/wallet", api_wallet)
