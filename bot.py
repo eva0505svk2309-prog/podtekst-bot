@@ -2181,10 +2181,18 @@ NY_END = len(QUIZ_BANK)
 # Расширенные пули лежат отдельным модулем: bot.py и так уже большой,
 # а контент удобно править не трогая логику.
 try:
-    from quiz_pack import EXTRA_QUESTIONS, EXTRA_POSTS
+    from quiz_pack import EXTRA_QUESTIONS
     QUIZ_BANK = QUIZ_BANK + EXTRA_QUESTIONS
 except Exception as _qp_e:  # noqa: BLE001
     logging.warning("quiz_pack not loaded: %s", _qp_e)
+
+# EXTRA_POSTS может отсутствовать в старой версии quiz_pack.py —
+# импорт делаем мягким, иначе весь пакет вопросов не грузится целиком.
+try:
+    from quiz_pack import EXTRA_POSTS
+except Exception as _qp_e2:  # noqa: BLE001
+    EXTRA_POSTS = []
+    logging.warning("quiz_pack EXTRA_POSTS missing: %s", _qp_e2)
 
 
 
@@ -5471,6 +5479,7 @@ async def publish_previous_answer():
     while len(counts) < len(options):
         counts.append(0)
     total = sum(counts)
+    lines = ""
     if total <= 0:
         head = "⏳ Голосов почти не было — отвечаем по смыслу."
     else:
