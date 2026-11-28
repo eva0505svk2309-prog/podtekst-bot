@@ -2782,7 +2782,8 @@ function renderPet(){
    if(upBtn) upBtn.style.display="none";
   }else if(cost>0){
    const have=Math.floor((S.shards||0)/10);
-   upBox.innerHTML="Следующая стадия: <b>"+Math.ceil(cost/10)+" ⭐</b> осколков. У тебя: <b>"+have+" ⭐</b>.";
+   upBox.innerHTML="Следующая стадия: <b>"+Math.ceil(cost/10)+" ⭐</b> ("
+     +cost+" осколков). У тебя: <b>"+have+" ⭐</b> ("+Math.floor(S.shards||0)+" осколков).";
    if(upBtn){
     upBtn.style.display="";
     upBtn.textContent="⬆️ Прокачать за "+Math.ceil(cost/10)+" ⭐";
