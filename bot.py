@@ -586,23 +586,31 @@ def _season_day_index(now_ts=None):
 
 
 def season_state(now_ts=None):
-    """Текущий сезон: номер, длительность, финальный ли, сколько дней осталось."""
+    """Текущий сезон: номер, день, длительность, финальный ли, сколько дней осталось.
+
+    Цикл: три сезона по 21 день, затем финальный на 30 дней. День и остаток
+    считаются от одного и того же места — иначе «осталось 1 дн.» показывалось
+    на последний день, а финальный сезон считал дни не с того дня.
+    """
     di = _season_day_index(now_ts)
-    # Сезоны идут по очереди: три по 21 день, затем финальный на 30 дней.
     cycle = 3 * SEASON_LEN_DAYS + SEASON_FINALE_LEN_DAYS
-    pos = di % cycle
+    block = di // cycle          # сколько полных циклов прошло
+    pos = di % cycle             # день внутри текущего цикла
     if pos < 3 * SEASON_LEN_DAYS:
-        num = di // cycle * 4 + pos // SEASON_LEN_DAYS + 1
+        idx = pos // SEASON_LEN_DAYS
+        day = pos % SEASON_LEN_DAYS + 1
         length = SEASON_LEN_DAYS
         finale = False
     else:
-        num = di // cycle * 4 + 4
+        idx = 3
+        day = pos - 3 * SEASON_LEN_DAYS + 1
         length = SEASON_FINALE_LEN_DAYS
         finale = True
-    left = length - (pos % length if not finale else pos - 3 * SEASON_LEN_DAYS)
-    return {"number": num, "day": (pos % length) + 1, "length": length,
-            "finale": finale, "days_left": max(0, left),
-            "progress": round(min(1.0, ((pos % length) + 1) / length), 3)}
+    number = block * 4 + idx + 1
+    days_left = length - day
+    return {"number": number, "day": day, "length": length,
+            "finale": finale, "days_left": days_left,
+            "progress": round(min(1.0, day / length), 3)}
 
 
 # ---------- ОКНО ОБМЕНА ----------
@@ -621,15 +629,16 @@ def gift_window_open(now_ts=None):
     return tm.tm_wday == GIFT_WINDOW_WEEKDAY
 
 
-def gift_window_next_text():
+def gift_window_next_text(now_ts=None):
     """Когда откроется следующий обмен."""
-    if gift_window_open():
+    if gift_window_open(now_ts):
         return "сегодня"
-    tm = time.gmtime(_now() + DAY_TZ_OFFSET * 3600)
+    now_ts = now_ts or _now()
+    tm = time.gmtime(now_ts + DAY_TZ_OFFSET * 3600)
     days = (GIFT_WINDOW_WEEKDAY - tm.tm_wday) % 7
     if days == 0:
         days = 7
-    st = season_state()
+    st = season_state(now_ts)
     if st["days_left"] <= 2:
         return f"через {days} дн. (или в финале сезона)"
     return f"через {days} дн."
@@ -819,17 +828,16 @@ def gift_catalog_view():
 # Осколки — обещание, а не деньги: если игроки выкупат больше подарков, чем
 # проект может оплатить, обещание перестанет работать. Поэтому общий бюджет
 # подарков ограничен и тратится по мере обменов.
-GIFT_FUND_BUDGET_SHARDS = 50000   # 5000 звезд в осколках — общий фонд проекта
-GIFT_REF_BUDGET_SHARDS = 5000     # резерв реферальной программы: 500 звезд
+GIFT_FUND_BUDGET_SHARDS = 50000   # 5000 звезд в осколках — фонд подарков
+REF_FUND_BUDGET_SHARDS = 50000    # 5000 звезд — бюджет реферальной программы
 
 
 def gift_fund_state(d=None):
-    """Сколько подарков ещё может оплатить проект."""
+    """Фонд подарков: сколько ещё может оплатить проект."""
     d = d or load_store()
     spent = int(d.get("_gift_fund_spent", 0) or 0)
-    total = GIFT_FUND_BUDGET_SHARDS + GIFT_REF_BUDGET_SHARDS
-    return {"spent": spent, "total": total,
-            "left": max(0, total - spent)}
+    return {"spent": spent, "total": GIFT_FUND_BUDGET_SHARDS,
+            "left": max(0, GIFT_FUND_BUDGET_SHARDS - spent)}
 
 
 def gift_fund_spend(d, units):
@@ -1025,6 +1033,30 @@ async def _channel_sub_check(user_id: int):
     sub["claimed"] = True; sub["ts"] = int(time.time())
     save_store(d)
     return "ok", SUB_REWARD
+
+
+# ---------- БЮДЖЕТ РЕФЕРАЛОВ ----------
+# Рефералка раздаёт осколки из общего бюджета 5000 звезд. Без потолка
+# программа съест фонд подарков: 10 приглашённых в день по 1.5 звезды — это
+# 15 000 звезд в год, а фонд подарков всего 5000.
+def ref_fund_state(d=None):
+    """Сколько осколков рефералка ещё может раздать."""
+    d = d or load_store()
+    spent = int(d.get("_ref_fund_spent", 0) or 0)
+    return {"spent": spent, "total": REF_FUND_BUDGET_SHARDS,
+            "left": max(0, REF_FUND_BUDGET_SHARDS - spent)}
+
+
+def ref_fund_spend(d, units):
+    """Списать из бюджета рефералки. False — бюджет исчерпан."""
+    units = int(units)
+    if units <= 0:
+        return True
+    st = ref_fund_state(d)
+    if st["left"] < units:
+        return False
+    d["_ref_fund_spent"] = st["spent"] + units
+    return True
 
 
 @dp.callback_query(F.text.startswith("check_sub"))
@@ -2004,14 +2036,24 @@ async def apply_referral_star(user_id, payload):
         return ("cap", inviter, 0, 0)
 
     a1 = acc_of(d, inviter); a2 = acc_of(d, user_id)
+    # Бюджет рефералки — общий потолок программы: 5000 звезд. Пока он есть,
+    # начисляем как обычно; когда кончится — рефералка перестаёт раздавать
+    # осколки, а не выдаёт обещания, которые нечем оплатить.
+    fund_room = max(0, ref_fund_state(d)["left"])
+    if fund_room <= 0:
+        return ("cap", inviter, 0, 0)
     # Новичку осколок идёт СРАЗУ за переход - ради этого он и перешёл
     # по ссылке. Пригласившему - только за живого подписчика канала,
     # иначе это чистый фарм (привёл и отписался).
     # Новичку 0.5 звезды (5 единиц) СРАЗУ за переход по ссылке.
-    give_new = min(REF_SHARD_NEW, room)
+    give_new = min(REF_SHARD_NEW, room, fund_room)
     give_inv = 0
     if sub_new is True and (not REF_SUB_REQUIRED or sub_inv is True):
-        give_inv = min(REF_SHARD_INVITER, max(0, room - give_new))
+        give_inv = min(REF_SHARD_INVITER, max(0, room - give_new),
+                       max(0, fund_room - give_new))
+    if give_new <= 0 and give_inv <= 0:
+        return ("cap", inviter, 0, 0)
+    ref_fund_spend(d, give_new + give_inv)
     d[f"ref_star:{user_id}"] = inviter
     shards_add(a2, give_new, "referral")
     if give_inv:
@@ -2068,7 +2110,10 @@ async def api_stars(request):
                                        "active": int(_pp.get("active", 0)),
                                        "margin_pct": int(POOL_MARGIN * 100),
                                        "cap_mult": POOL_BUYER_CAP},
-                              "boost_price": PACK_FALL_BOOST})
+                              "boost_price": PACK_FALL_BOOST,
+                              "fund": gift_fund_state(d),
+                              "ref_fund": ref_fund_state(d),
+                              "season": season_state()})
 
 
 def gift_catalog_clean():
@@ -2197,7 +2242,11 @@ async def api_gift_buy(request):
         return web.json_response({"ok": False, "error": "not enough shards",
                                   "need": price, **star_view(acc)})
     # Фонд подарков: не обещаем больше, чем проект может оплатить.
-    if not gift_fund_spend(d, price):
+    # Списываем РЕАЛЬНУЮ стоимость подарка (номинал в единицах), а не цену
+    # для игрока: цена включает запас на комиссию, а фонд тратится на
+    # фактическую выплату Telegram.
+    fund_cost = int(stars) * STAR_PACK
+    if not gift_fund_spend(d, fund_cost):
         shards_add(acc, price, "gift_refund")
         save_store(d)
         return web.json_response({"ok": False, "error": "gift fund exhausted",
@@ -2207,9 +2256,10 @@ async def api_gift_buy(request):
         await bot.send_gift(gift_id=gid, user_id=uid)
     except Exception as e:
         logging.warning("send_gift failed gift=%s user=%s: %s", gid, uid, e)
-        # Возвращаем осколки — подарок не отправлен.
+        # Возвращаем осколки И фонд — подарок не отправлен, значит и не оплачен.
         d2 = load_store(); a2 = acc_of(d2, uid)
         shards_add(a2, price, "gift_refund")
+        d2["_gift_fund_spent"] = max(0, int(d2.get("_gift_fund_spent", 0) or 0) - fund_cost)
         save_store(d2)
         return web.json_response({"ok": False, "error": "gift failed",
                                   **star_view(a2)})
