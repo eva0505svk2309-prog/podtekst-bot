@@ -688,7 +688,23 @@ def shards_add(acc, units, reason="", enforce_cap=True):
     """
     st = acc.setdefault("star", {})
     units = int(units)
-    if enforce_cap and units > 0:
+    if units < 0:
+        # Списание. Раньше здесь стоял `if units <= 0: return 0`, из-за чего
+        # ОТРИЦАТЕЛЬНОЕ значение не списывало ничего: прокачка стадии питомца,
+        # заморозка серии, вопрос Мире и возврат бустера проверяли баланс и
+        # говорили «списали», а осколки оставались у игрока. Теперь списываем.
+        spend = -units
+        have = int(st.get("shards", 0))
+        if have < spend:
+            return 0
+        st["shards"] = have - spend
+        if reason:
+            log = st.setdefault("log", [])
+            log.append({"u": -spend, "r": reason, "t": _now()})
+            if len(log) > 60:
+                del log[:-60]
+        return -spend
+    if enforce_cap:
         tier = shard_tier(acc)
         cap = SHARD_TIERS.get(tier, SHARD_TIERS["free"])[3]
         room = max(0, cap - shard_day_spent(acc))
