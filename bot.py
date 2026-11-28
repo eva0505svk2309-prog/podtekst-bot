@@ -310,6 +310,11 @@ GIFT_CATALOG = {
 # получает 0.85 номинала звёздами и выводит их через Fragment в GRAM.
 # Проект при этом в плюсе: осколки игрок оплачивает по ~$0.02 за звезду,
 # а подарок бот покупает на Stars, выведенных по $0.013.
+GIFT_RATE = 1.15              # цена подарка в осколках = номинал × 1.15.
+                          # Игрок получает 85% номинала при конвертации,
+                          # поэтому запас 15% покрывает комиссию Telegram:
+                          # покупка не уходит в минус. Старый GIFT_MARGIN = 2.5
+                          # отдавал игроку минус 24,5⭐ за каждый подарок.
 GIFT_MARGIN = 2.5         # запас на просадку при обмене подарка (анализ 27.11):
                           # при 2.5 один осколок стоит $0.00056, и rewarded-показ
                           # (eCPM $5.15) окупает до 9 осколков вместо 3.6
@@ -561,19 +566,73 @@ def gram_market():
     return data or {}
 
 
-def gift_window_open(now_ts=None):
-    """Окно обмена на подарки: 1-е..7-е число каждого месяца."""
+# ---------- СЕЗОНЫ ----------
+# Сезон — игровой цикл с дедлайном. В конце сезона обмен подарков открывается
+# для всех, а в течение сезона — раз в неделю. Сезоны короткие, чтобы
+# новичок успевал увидеть результат, а не копить месяцами.
+SEASON_LEN_DAYS = 21            # обычный сезон
+SEASON_FINALE_LEN_DAYS = 30     # длинный сезон-финал (раз в 4 сезона)
+SEASON_EPOCH = "2026-11-14"     # дата старта первого сезона (МСК)
+
+
+def _season_day_index(now_ts=None):
+    """Номер дня с начала эпохи сезонов (МСК)."""
     now_ts = now_ts or _now()
     tm = time.gmtime(now_ts + DAY_TZ_OFFSET * 3600)
-    return tm.tm_mday <= GIFT_WINDOW_DAYS
+    today = time.strftime("%Y-%m-%d", tm)
+    e = time.mktime(time.strptime(SEASON_EPOCH, "%Y-%m-%d"))
+    t = time.mktime(time.strptime(today, "%Y-%m-%d"))
+    return max(0, int((t - e) // 86400))
+
+
+def season_state(now_ts=None):
+    """Текущий сезон: номер, длительность, финальный ли, сколько дней осталось."""
+    di = _season_day_index(now_ts)
+    # Сезоны идут по очереди: три по 21 день, затем финальный на 30 дней.
+    cycle = 3 * SEASON_LEN_DAYS + SEASON_FINALE_LEN_DAYS
+    pos = di % cycle
+    if pos < 3 * SEASON_LEN_DAYS:
+        num = di // cycle * 4 + pos // SEASON_LEN_DAYS + 1
+        length = SEASON_LEN_DAYS
+        finale = False
+    else:
+        num = di // cycle * 4 + 4
+        length = SEASON_FINALE_LEN_DAYS
+        finale = True
+    left = length - (pos % length if not finale else pos - 3 * SEASON_LEN_DAYS)
+    return {"number": num, "day": (pos % length) + 1, "length": length,
+            "finale": finale, "days_left": max(0, left),
+            "progress": round(min(1.0, ((pos % length) + 1) / length), 3)}
+
+
+# ---------- ОКНО ОБМЕНА ----------
+# Раньше обмен открывался 1-7 числа месяца. Теперь — раз в неделю (понедельник)
+# плюс финальный день сезона. Короче, чаще, и с понятным дедлайном.
+GIFT_WINDOW_WEEKDAY = 0         # понедельник
+GIFT_SEASON_FINALE_GIFT = True   # в последний день сезона обмен открыт для всех
+
+
+def gift_window_open(now_ts=None):
+    """Открыт ли сейчас обмен подарков."""
+    now_ts = now_ts or _now()
+    tm = time.gmtime(now_ts + DAY_TZ_OFFSET * 3600)
+    if GIFT_SEASON_FINALE_GIFT and season_state(now_ts)["days_left"] <= 1:
+        return True
+    return tm.tm_wday == GIFT_WINDOW_WEEKDAY
 
 
 def gift_window_next_text():
+    """Когда откроется следующий обмен."""
+    if gift_window_open():
+        return "сегодня"
     tm = time.gmtime(_now() + DAY_TZ_OFFSET * 3600)
-    if tm.tm_mday <= GIFT_WINDOW_DAYS:
-        days = GIFT_WINDOW_DAYS - tm.tm_mday
-        return f"через {days} дн." if days else "сегодня"
-    return "в начале следующего месяца"
+    days = (GIFT_WINDOW_WEEKDAY - tm.tm_wday) % 7
+    if days == 0:
+        days = 7
+    st = season_state()
+    if st["days_left"] <= 2:
+        return f"через {days} дн. (или в финале сезона)"
+    return f"через {days} дн."
 
 
 def shards_of(acc):
@@ -713,6 +772,8 @@ def star_view(acc):
         "tier": shard_tier(acc),
         "gift_open": gift_window_open(),
         "gift_next": gift_window_next_text(),
+        "season": season_state(),
+        "fund": gift_fund_state(),
         "boost_until": int(st.get("boost_until", 0)),
         "chance": round(star_chance_for(acc), 3),
         "contributed": int(st.get("contributed", 0)),
@@ -722,8 +783,15 @@ def star_view(acc):
 
 
 def price_units(stars):
-    """Цена подарка в осколках: номинал × 10 единиц × запас на просадку."""
-    return int(round(int(stars) * STAR_PACK * GIFT_MARGIN))
+    """Цена подарка в осколках.
+
+    Раньше было номинал × 10 × 2.5: игрок платил 375 осколков за подарок
+    номиналом 15⭐ и получал 12.75⭐ — минус 24,5⭐ за каждую покупку.
+    Теперь цена равна номиналу в осколках (1⭐ = 10 единиц) с небольшим
+    запасом на комиссию Telegram 15%: игрок выходит ровно в ноль или
+    в плюс, а проект не продаёт подарки себе в убыток.
+    """
+    return int(round(int(stars) * STAR_PACK * GIFT_RATE))
 
 
 def gift_catalog_view():
@@ -745,6 +813,32 @@ def gift_catalog_view():
                             int(round(stars * GIFT_CONVERT_RATE))})
     out.sort(key=lambda x: (x["stars"], x["name"]))
     return out
+
+
+# ---------- ЛИМИТ ФОНДА ПОДАРКОВ ----------
+# Осколки — обещание, а не деньги: если игроки выкупат больше подарков, чем
+# проект может оплатить, обещание перестанет работать. Поэтому общий бюджет
+# подарков ограничен и тратится по мере обменов.
+GIFT_FUND_BUDGET_SHARDS = 50000   # 5000 звезд в осколках — общий фонд проекта
+GIFT_REF_BUDGET_SHARDS = 5000     # резерв реферальной программы: 500 звезд
+
+
+def gift_fund_state(d=None):
+    """Сколько подарков ещё может оплатить проект."""
+    d = d or load_store()
+    spent = int(d.get("_gift_fund_spent", 0) or 0)
+    total = GIFT_FUND_BUDGET_SHARDS + GIFT_REF_BUDGET_SHARDS
+    return {"spent": spent, "total": total,
+            "left": max(0, total - spent)}
+
+
+def gift_fund_spend(d, units):
+    """Списать из фонда подарков. False — фонд исчерпан."""
+    st = gift_fund_state(d)
+    if st["left"] < int(units):
+        return False
+    d["_gift_fund_spent"] = st["spent"] + int(units)
+    return True
 
 ALIAS = {"buy": "coins_100", "buy:lives": "lives", "buy:noads": "noads",
           "buy:contest_entry": "contest_entry", "buy:fall_boost": "fall_boost",
@@ -2102,6 +2196,12 @@ async def api_gift_buy(request):
         save_store(d)
         return web.json_response({"ok": False, "error": "not enough shards",
                                   "need": price, **star_view(acc)})
+    # Фонд подарков: не обещаем больше, чем проект может оплатить.
+    if not gift_fund_spend(d, price):
+        shards_add(acc, price, "gift_refund")
+        save_store(d)
+        return web.json_response({"ok": False, "error": "gift fund exhausted",
+                                  **star_view(acc)})
     save_store(d)
     try:
         await bot.send_gift(gift_id=gid, user_id=uid)
