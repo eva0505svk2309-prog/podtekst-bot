@@ -767,26 +767,32 @@ var LOC=(function(){
       var o=st();body=body||{};
       /* Офлайн-режим: звёзды и подарки работают локально, без сервера. */
       if(path==="/api/stars"){
+        /* Цены — по серверному курсу 1.15 (номинал × 10 × 1.15), а не по
+           старому 2.5: в демо и на проде должна быть одна и та же цифра. */
         var gifts=[
-          {id:"5170145012310081615",emoji:"💝",name:"Сердце с бантом",stars:15,price:190},
-          {id:"5170233102089322756",emoji:"🧸",name:"Мишка",stars:15,price:190},
-          {id:"5170250947678437525",emoji:"🎁",name:"Коробка с бантом",stars:25,price:310},
-          {id:"5168103777563050263",emoji:"🌹",name:"Красная роза",stars:25,price:310},
-          {id:"5170144170496491616",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:625},
-          {id:"5170314324215857265",emoji:"💐",name:"Букет",stars:50,price:625},
-          {id:"5170564780938756245",emoji:"🚀",name:"Ракета",stars:50,price:625},
-          {id:"6028601630662853006",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:625},
-          {id:"5168043875654172773",emoji:"🏆",name:"Кубок",stars:100,price:1250},
-          {id:"5170690322832818290",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1250},
-          {id:"5170521118301225164",emoji:"💎",name:"Алмаз",stars:100,price:1250}];
+          {id:"5170145012310081615",emoji:"💝",name:"Сердце с бантом",stars:15,price:173,season:true},
+          {id:"5170233102089322756",emoji:"🧸",name:"Мишка",stars:15,price:173},
+          {id:"5170250947678437525",emoji:"🎁",name:"Коробка с бантом",stars:25,price:288,season:true},
+          {id:"5168103777563050263",emoji:"🌹",name:"Красная роза",stars:25,price:288},
+          {id:"5170144170496491616",emoji:"🎂",name:"Торт ко дню рождения",stars:50,price:575,season:true},
+          {id:"5170314324215857265",emoji:"💐",name:"Букет",stars:50,price:575},
+          {id:"5170564780938756245",emoji:"🚀",name:"Ракета",stars:50,price:575,season:true},
+          {id:"6028601630662853006",emoji:"🍾",name:"Бутылка шампанского",stars:50,price:575,season:true},
+          {id:"5168043875654172773",emoji:"🏆",name:"Кубок",stars:100,price:1150},
+          {id:"5170690322832818290",emoji:"💍",name:"Кольцо с бриллиантом",stars:100,price:1150},
+          {id:"5170521118301225164",emoji:"💎",name:"Алмаз",stars:100,price:1150}];
         var today=new Date();var wd=today.getDay();
         var fallOpen=(wd===5&&today.getHours()>=18)||wd===6||wd===0;
-        var giftOpen=today.getDate()<=7;
+        /* Окно обмена — раз в неделю (понедельник), как на сервере. */
+        var giftOpen=(today.getDay()===1);
+        var seasonDaysLeft=((21-((Math.floor((today-new Date(2026,10,14))/86400000))%21))%21);
         var chance=0.35;if(fallOpen)chance*=2;if(o.shards>=60)chance*=0.25;else if(o.shards>=30)chance*=0.5;
         if(chance>0.95)chance=0.95;
         return Promise.resolve({ok:true,shards:o.shards,stars:Math.round(o.shards/10*100)/100,
           fall_open:fallOpen,fall_next:fallOpen?"сейчас":"в пятницу",gift_open:giftOpen,
-          gift_next:giftOpen?"сегодня":"в начале следующего месяца",boost_until:0,
+          gift_next:giftOpen?"сегодня":"в понедельник",
+          season:{number:1,day:1,length:21,finale:false,days_left:seasonDaysLeft,progress:0.5},
+          boost_until:0,
           boost_price:200,contributed:0,pool_earned:0,pool_cap:0,
           pool:{distributable:0,stars:0,active:0,margin_pct:30,cap_mult:1.667},
           chance:Math.round(chance*1000)/1000,gifts:gifts});
@@ -829,7 +835,26 @@ var LOC=(function(){
           /* counts должны быть по редкости (common/rare/...), а не по id карты —
              иначе клиент рисует «undefined undefined: 1» вместо легенды. */
           var byRar={};items.forEach(function(it){byRar[it.rarity]=(byRar[it.rarity]||0)+it.count;});
-          return Promise.resolve({ok:true,items:items,total:items.reduce(function(a,b){return a+b.count;},0),counts:byRar});
+          /* Локальный режим повторяет серверные пороги подарков и цены обмена,
+             иначе демо показывает одну картину, а прод — другую. */
+          var GITF=[{r:"common",n:10,t:"🪙 100 монет"},{r:"rare",n:10,t:"❤️ +1 жизнь"},
+                    {r:"epic",n:10,t:"🪙 300 монет и ❤️ +1 жизнь"},{r:"legend",n:3,t:"🚫 без рекламы и 🪙 500 монет"}];
+          var stage=o.giftStage||{};
+          /* RAR_NAME/RAR_ICON объявлены ниже по файлу, а этот блок выполняется
+             раньше (LOC — IIFE, он сразу исполняется). Обращение к ним здесь
+             давало бы ошибку загрузки, поэтому словари продублированы. */
+          var LRAR={common:{n:"Обычные",i:"⚪"},rare:{n:"Редкие",i:"🔵"},
+                    epic:{n:"Эпические",i:"🟣"},legend:{n:"Легендарные",i:"🟡"}};
+          var progress=GITF.map(function(g){
+            var have=byRar[g.r]||0,done=stage[g.r]||0;
+            var rr=LRAR[g.r]||{n:g.r,i:""};
+            return {rarity:g.r,name:rr.n,icon:rr.i,have:have,need:g.n,
+                    done:done,next_need:Math.max(0,(done+1)*g.n-have),title:g.t};
+          });
+          return Promise.resolve({ok:true,items:items,total:items.reduce(function(a,b){return a+b.count;},0),counts:byRar,
+            progress:progress,
+            exchange:{need:3,coins:{common:15,rare:60,epic:180,legend:400},
+                      shards:{common:10,rare:25,epic:60,legend:150}}});
         }
         if(body.action==="open"){
           if(o.coins<30)return Promise.resolve({ok:false,error:"not_enough_coins"});
@@ -839,9 +864,13 @@ var LOC=(function(){
         if(body.action==="exchange"){
           var cnt=o.cardCounts[body.card_id]||0;
           if(cnt<3)return Promise.resolve({ok:false,error:"not_enough_cards"});
+          var pool=cardPool(),rar="common";
+          for(var qi=0;qi<pool.length;qi++){if(pool[qi].id===body.card_id)rar=pool[qi].rarity;}
+          var ec={common:15,rare:60,epic:180,legend:400}[rar]||15;
+          var es={common:10,rare:25,epic:60,legend:150}[rar]||0;
           o.cardCounts[body.card_id]=cnt-3;if(!o.cardCounts[body.card_id])delete o.cardCounts[body.card_id];
-          o.coins+=15;save(o);
-          return Promise.resolve({ok:true,coins:o.coins});
+          o.coins+=ec;o.shards=(o.shards||0)+es;save(o);
+          return Promise.resolve({ok:true,coins:o.coins,got:ec,got_shards:es,rarity:rar});
         }
         save(o);return Promise.resolve({ok:true});
       }
@@ -1433,9 +1462,10 @@ async function loadStars(){
   $("fallText").textContent = j.fall_open
    ? "Окно Звездопада открыто — осколки падают чаще. Бустер «Звездопад+» добавляет ещё +80% к шансу на 3 дня."
    : "Следующее окно — "+j.fall_next+". В это время шанс дропа удваивается.";
+  var sn=(j.season&&j.season.number)?(" · Сезон "+j.season.number+", осталось "+j.season.days_left+" дн."):"";
   $("starGiftNote").textContent = j.gift_open
-   ? "Обмен открыт. Один подарок в сутки, осколки списываются после отправки."
-   : "Обмен откроется "+j.gift_next+" (1-е..7-е число месяца).";
+   ? "Обмен открыт"+sn+". Один подарок в сутки, осколки списываются после отправки."
+   : "Обмен откроется "+j.gift_next+sn+".";
  }catch(e){}
  var box=$("starGifts");if(!box)return;
  box.innerHTML="";
@@ -1447,9 +1477,13 @@ async function loadStars(){
    "border:1px solid #3b2a63;border-radius:12px;padding:9px";
   var l=document.createElement("div");
   l.style.cssText="flex:1;font-size:14px";
-  l.textContent=g.emoji+" "+g.name+" — "+g.stars+" ⭐";
+  /* Цену в осколках на кнопке не показываем: игрок видел большое число и
+     думал, что подарок недоступен. Номинал и выгода — честнее. */
+  l.innerHTML="<div>"+g.emoji+" "+esc(g.name)+"</div>"+
+   "<div style='color:#ffd76a;font-size:12px;margin-top:2px'>"+g.stars+" ⭐"+
+   (g.season?" · сезонный":"")+"</div>";
   var b=document.createElement("button");
-  b.textContent=g.price+" ✨";
+  b.textContent="Обменять";
   b.style.cssText="padding:8px 12px;font-size:13px"+(can?"":";opacity:.45");
   b.disabled=!can;
   b.onclick=async function(){
@@ -1462,12 +1496,13 @@ async function loadStars(){
    }else{
     applyStarState(r);
     var msg="Не вышло";
-    if(r&&r.error==="not enough shards")msg="Не хватает осколков — нужно "+r.need+" ✨";
+    if(r&&r.error==="not enough shards")msg="Не хватает осколков — копи дальше.";
     else if(r&&r.error==="cooldown")msg="Уже покупал сегодня. Попробуй завтра.";
     else if(r&&r.error==="gift window closed")msg="Обмен закрыт: "+r.next;
+    else if(r&&r.error==="gift fund exhausted")msg="Фонд подарков исчерпан — обмен временно недоступен.";
     else if(r&&r.error==="gift failed")msg="Не удалось отправить подарок — осколки вернули.";
     toast(msg);
-    b.disabled=false;b.textContent=g.price+" ✨";
+    b.disabled=false;b.textContent="Обменять";
    }
   };
   d.appendChild(l);d.appendChild(b);box.appendChild(d);
